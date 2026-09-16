@@ -2,7 +2,7 @@ pub mod db;
 pub mod scanner;
 
 pub use db::VulnerabilityDb;
-pub use scanner::{Scanner, Finding, Severity};
+pub use scanner::{Finding, Scanner, Severity};
 
 #[derive(thiserror::Error, Debug)]
 pub enum VulnError {

@@ -1,12 +1,9 @@
-use std::path::{Path, PathBuf};
 use crate::{Package, Result};
 
-pub fn parse_node(
-    inventory: &bedrock_fs::FileInventory,
-) -> Result<Vec<Package>> {
+pub fn parse_node(inventory: &bedrock_fs::FileInventory) -> Result<Vec<Package>> {
     let mut packages = Vec::new();
     // For node, we look for package.json in node_modules
-    for (path, _) in &inventory.files {
+    for path in inventory.files.keys() {
         let path_str = path.to_string_lossy();
         if path_str.contains("node_modules") && path_str.ends_with("package.json") {
             // Very naive parser for phase 1
@@ -16,11 +13,11 @@ pub fn parse_node(
             // usually .../node_modules/<name>/package.json
             for i in 0..parts.len() {
                 if parts[i] == "node_modules" && i + 2 == parts.len() {
-                    name = parts[i+1];
+                    name = parts[i + 1];
                     break;
                 }
             }
-            
+
             if name != "unknown" {
                 let purl = format!("pkg:npm/{}@unknown", name);
                 packages.push(Package {

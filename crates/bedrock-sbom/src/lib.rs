@@ -1,10 +1,10 @@
 pub mod apk;
+pub mod cyclonedx;
 pub mod dpkg;
-pub mod rpm;
 pub mod node;
 pub mod python;
+pub mod rpm;
 pub mod spdx;
-pub mod cyclonedx;
 
 use std::path::PathBuf;
 

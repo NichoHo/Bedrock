@@ -1,17 +1,17 @@
 pub mod config;
+pub mod elf;
 pub mod sandbox;
 pub mod tracer;
-pub mod elf;
 pub mod workload;
 
 pub use config::{TraceConfig, WorkloadKind};
+pub use elf::ElfClosure;
 pub use sandbox::Sandbox;
 pub use tracer::Tracer;
-pub use elf::ElfClosure;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReachSet {

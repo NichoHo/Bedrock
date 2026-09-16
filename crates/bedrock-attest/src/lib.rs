@@ -1,8 +1,7 @@
 pub mod in_toto;
-pub mod slsa;
 pub mod sigstore;
+pub mod slsa;
 
-use std::path::PathBuf;
 
 #[derive(thiserror::Error, Debug)]
 pub enum AttestError {

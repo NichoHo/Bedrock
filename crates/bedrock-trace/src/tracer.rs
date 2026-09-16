@@ -1,8 +1,9 @@
+use crate::{ReachSet, Result};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use crate::{Result, TraceError, ReachSet};
 
 pub struct Tracer {
+    #[allow(dead_code)]
     pid: u32,
 }
 
@@ -22,14 +23,11 @@ impl Tracer {
     pub fn trace(&mut self) -> Result<ReachSet> {
         // On non-Linux (like Windows during development), we return a dummy ReachSet for testing.
         println!("Warning: Tracing is not supported on this platform. Returning dummy trace.");
-        
+
         let mut reached = HashSet::new();
         reached.insert(PathBuf::from("bin/sh"));
         reached.insert(PathBuf::from("lib/libc.so.6"));
-        
-        Ok(ReachSet {
-            reached_paths: reached,
-            coverage_ratio: 0.1,
-        })
+
+        Ok(ReachSet { reached_paths: reached, coverage_ratio: 0.1 })
     }
 }

@@ -1,7 +1,8 @@
-use std::path::PathBuf;
 use crate::{Result, TraceError};
+use std::path::PathBuf;
 
 pub struct Sandbox {
+    #[allow(dead_code)]
     rootfs: PathBuf,
 }
 
@@ -22,11 +23,11 @@ impl Sandbox {
     pub fn run_entrypoint(&self, entrypoint: &[String]) -> Result<u32> {
         use nix::sched::{clone, CloneFlags};
         use nix::sys::wait::waitpid;
-        use nix::unistd::{chroot, chdir, execvp};
+        use nix::unistd::{chdir, chroot, execvp};
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
 
-        // Note: Real sandbox requires setting up user namespaces, mount namespaces, 
+        // Note: Real sandbox requires setting up user namespaces, mount namespaces,
         // mounting /proc, /sys, /dev, and dropping capabilities.
         // This is a minimal stub for Phase 3 structure.
         Err(TraceError::Sandbox("Linux sandbox not fully implemented yet".into()))

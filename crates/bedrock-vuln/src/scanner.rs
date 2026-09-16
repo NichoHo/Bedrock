@@ -32,12 +32,12 @@ impl<'a> Scanner<'a> {
     pub fn scan(&self, packages: &[Package]) -> Vec<Finding> {
         let mut findings = Vec::new();
         let advisories = self.db.get_advisories();
-        
+
         for pkg in packages {
             // Simplified PURL matching for Phase 2 stub
             // A real implementation would parse the PURL and compare version ranges
             let pkg_purl_base = pkg.purl.split('@').next().unwrap_or(&pkg.purl);
-            
+
             for adv in advisories {
                 for affected in &adv.affected_purls {
                     let affected_base = affected.split('@').next().unwrap_or(affected);
@@ -54,7 +54,7 @@ impl<'a> Scanner<'a> {
                 }
             }
         }
-        
+
         findings
     }
 }

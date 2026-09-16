@@ -42,15 +42,13 @@ impl RegistryClient {
     }
 
     pub async fn fetch_manifest(&self, tag_or_digest: &str) -> Result<Manifest> {
-        let url = format!(
-            "https://{}/v2/{}/manifests/{}",
-            self.registry, self.repository, tag_or_digest
-        );
+        let url =
+            format!("https://{}/v2/{}/manifests/{}", self.registry, self.repository, tag_or_digest);
         let mut req = self.client.get(&url).header(
             "Accept",
             "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json",
         );
-        
+
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
         }
@@ -65,12 +63,9 @@ impl RegistryClient {
     }
 
     pub async fn fetch_blob(&self, digest: &str) -> Result<Vec<u8>> {
-        let url = format!(
-            "https://{}/v2/{}/blobs/{}",
-            self.registry, self.repository, digest
-        );
+        let url = format!("https://{}/v2/{}/blobs/{}", self.registry, self.repository, digest);
         let mut req = self.client.get(&url);
-        
+
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
         }

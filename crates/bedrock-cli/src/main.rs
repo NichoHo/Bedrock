@@ -112,8 +112,6 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     let cli = Cli::parse();
 
     match &cli.command {
@@ -194,7 +192,7 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Sbom { image, format } => {
-            let cache = Cache::new().await.context("Failed to initialize cache")?;
+            let _cache = Cache::new().await.context("Failed to initialize cache")?;
             let reference = ImageReference::parse(image);
             
             // Helper function to build inventory and get resolver
@@ -220,8 +218,8 @@ async fn run() -> Result<()> {
                                 };
                                 
                                 let mut packages = Vec::new();
-                                packages.extend(bedrock_sbom::dpkg::parse_dpkg(&inventory, &resolver).unwrap_or_default());
-                                packages.extend(bedrock_sbom::apk::parse_apk(&inventory, &resolver).unwrap_or_default());
+                                packages.extend(bedrock_sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_default());
+                                packages.extend(bedrock_sbom::apk::parse_apk(&inventory, resolver).unwrap_or_default());
                                 packages.extend(bedrock_sbom::node::parse_node(&inventory).unwrap_or_default());
                                 packages.extend(bedrock_sbom::python::parse_python(&inventory).unwrap_or_default());
                                 
@@ -242,7 +240,7 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Db { action } => {
-            let mut db = bedrock_vuln::VulnerabilityDb::new().await.context("Failed to init DB")?;
+            let db = bedrock_vuln::VulnerabilityDb::new().await.context("Failed to init DB")?;
             match action {
                 DbAction::Update => {
                     anyhow::bail!("not implemented");

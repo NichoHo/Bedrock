@@ -1,10 +1,7 @@
-use std::path::{Path, PathBuf};
 use crate::{Package, Result};
+use std::path::PathBuf;
 
-pub fn parse_rpm<F>(
-    _inventory: &bedrock_fs::FileInventory,
-    _resolver: F,
-) -> Result<Vec<Package>>
+pub fn parse_rpm<F>(_inventory: &bedrock_fs::FileInventory, _resolver: F) -> Result<Vec<Package>>
 where
     F: Fn(&str) -> Option<PathBuf>,
 {

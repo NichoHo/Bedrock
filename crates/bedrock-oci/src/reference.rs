@@ -2,11 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum ImageReference {
-    Registry {
-        registry: String,
-        repository: String,
-        tag: String,
-    },
+    Registry { registry: String, repository: String, tag: String },
     OciLayout(PathBuf),
     DockerArchive(PathBuf),
 }
@@ -18,14 +14,16 @@ impl ImageReference {
         if path.exists() {
             if path.is_dir() {
                 return ImageReference::OciLayout(path);
-            } else if path.extension().map_or(false, |ext| ext == "tar") {
+            } else if path.extension().is_some_and(|ext| ext == "tar") {
                 return ImageReference::DockerArchive(path);
             }
         }
-        
+
         // registry/repository:tag
         let parts: Vec<&str> = input.split('/').collect();
-        let (registry, rest) = if parts.len() > 1 && (parts[0].contains('.') || parts[0].contains(':') || parts[0] == "localhost") {
+        let (registry, rest) = if parts.len() > 1
+            && (parts[0].contains('.') || parts[0].contains(':') || parts[0] == "localhost")
+        {
             (parts[0].to_string(), parts[1..].join("/"))
         } else {
             ("registry-1.docker.io".to_string(), input.to_string())
@@ -44,10 +42,6 @@ impl ImageReference {
             repository
         };
 
-        ImageReference::Registry {
-            registry,
-            repository,
-            tag,
-        }
+        ImageReference::Registry { registry, repository, tag }
     }
 }

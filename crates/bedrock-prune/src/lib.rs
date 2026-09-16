@@ -1,6 +1,6 @@
-use std::collections::{HashSet, HashMap};
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct KeepList {
@@ -40,20 +40,20 @@ impl KeepSet {
         sbom: &bedrock_sbom::Sbom,
     ) -> Self {
         let mut paths = HashSet::new();
-        
+
         // 1. Dynamic reach set
         paths.extend(trace.reached_paths.iter().cloned());
-        
+
         // 2. Mandatory paths (e.g. /etc/passwd, /tmp)
         for p in mandatory_paths {
             paths.insert(p.to_path_buf());
         }
-        
+
         // 3. Keep list paths
         for p in &keep_list.paths {
             paths.insert(PathBuf::from(p));
         }
-        
+
         // 4. Keep list packages (all files owned by the package)
         let keep_pkgs: HashSet<_> = keep_list.packages.iter().collect();
         for pkg in &sbom.packages {
@@ -61,7 +61,7 @@ impl KeepSet {
                 paths.extend(pkg.files.iter().cloned());
             }
         }
-        
+
         Self { paths }
     }
 }
@@ -74,20 +74,23 @@ impl Assembler {
     pub fn new(output_dir: PathBuf) -> Self {
         Self { output_dir }
     }
-    
-    pub fn assemble(&self, _inventory: &bedrock_fs::FileInventory, keep_set: &KeepSet, _preserve_layers: bool) -> Result<Vec<RemovalEvidence>> {
+
+    pub fn assemble(
+        &self,
+        _inventory: &bedrock_fs::FileInventory,
+        keep_set: &KeepSet,
+        _preserve_layers: bool,
+    ) -> Result<Vec<RemovalEvidence>> {
         // Stub for assembling the final OCI image using fixed timestamps
         println!("Assembling pruned image into {}...", self.output_dir.display());
         println!("Keeping {} paths.", keep_set.paths.len());
-        
+
         // Dummy evidence
-        Ok(vec![
-            RemovalEvidence {
-                package_name: "curl".to_string(),
-                removed_files: 10,
-                kept_files: 0,
-                reason: "Unreachable".to_string(),
-            }
-        ])
+        Ok(vec![RemovalEvidence {
+            package_name: "curl".to_string(),
+            removed_files: 10,
+            kept_files: 0,
+            reason: "Unreachable".to_string(),
+        }])
     }
 }

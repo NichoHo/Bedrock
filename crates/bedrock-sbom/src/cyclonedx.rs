@@ -3,7 +3,7 @@ use serde_json::json;
 
 pub fn write_cyclonedx(sbom: &Sbom) -> String {
     let mut components = Vec::new();
-    
+
     for pkg in &sbom.packages {
         components.push(json!({
             "type": "library",
@@ -12,7 +12,7 @@ pub fn write_cyclonedx(sbom: &Sbom) -> String {
             "purl": pkg.purl
         }));
     }
-    
+
     let doc = json!({
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -20,6 +20,6 @@ pub fn write_cyclonedx(sbom: &Sbom) -> String {
         "version": 1,
         "components": components
     });
-    
+
     serde_json::to_string_pretty(&doc).unwrap()
 }

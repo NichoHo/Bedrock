@@ -16,3 +16,5 @@ name = "dpkg_fuzzer"
 path = "fuzz_targets/dpkg_fuzzer.rs"
 test = false
 doc = false
+[workspace]  
+ 

@@ -1,5 +1,5 @@
-use crate::{OciError, Result};
-use std::path::{Path, PathBuf};
+use crate::Result;
+use std::path::PathBuf;
 use tokio::fs;
 
 pub struct Cache {
@@ -22,7 +22,7 @@ impl Cache {
     pub async fn blob_exists(&self, digest: &str) -> bool {
         fs::metadata(self.get_blob_path(digest)).await.is_ok()
     }
-    
+
     pub async fn write_blob(&self, digest: &str, data: &[u8]) -> Result<()> {
         let path = self.get_blob_path(digest);
         if let Some(parent) = path.parent() {

@@ -2,20 +2,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SlsaProvenance {
-    pub buildDefinition: BuildDefinition,
-    pub runDetails: RunDetails,
+    #[serde(rename = "buildDefinition")]
+    pub build_definition: BuildDefinition,
+    #[serde(rename = "runDetails")]
+    pub run_details: RunDetails,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BuildDefinition {
-    pub buildType: String,
-    pub externalParameters: ExternalParameters,
-    pub resolvedDependencies: Vec<ResolvedDependency>,
+    #[serde(rename = "buildType")]
+    pub build_type: String,
+    #[serde(rename = "externalParameters")]
+    pub external_parameters: ExternalParameters,
+    #[serde(rename = "resolvedDependencies")]
+    pub resolved_dependencies: Vec<ResolvedDependency>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExternalParameters {
-    pub sourceImage: String,
+    #[serde(rename = "sourceImage")]
+    pub source_image: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,7 +43,10 @@ pub struct Builder {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Metadata {
-    pub invocationId: String,
-    pub startedOn: String,
-    pub finishedOn: String,
+    #[serde(rename = "invocationId")]
+    pub invocation_id: String,
+    #[serde(rename = "startedOn")]
+    pub started_on: String,
+    #[serde(rename = "finishedOn")]
+    pub finished_on: String,
 }

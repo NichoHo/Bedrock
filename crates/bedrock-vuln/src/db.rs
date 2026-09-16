@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
+use crate::Result;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tokio::fs;
-use crate::{Result, VulnError};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SnapshotMeta {
@@ -28,15 +28,12 @@ impl VulnerabilityDb {
         let cache_home = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("."));
         let db_dir = cache_home.join("bedrock").join("vuln-db");
         fs::create_dir_all(&db_dir).await?;
-        
-        let mut db = Self {
-            dir: db_dir,
-            advisories: Vec::new(),
-        };
+
+        let mut db = Self { dir: db_dir, advisories: Vec::new() };
         db.load_snapshot().await?;
         Ok(db)
     }
-    
+
     pub async fn load_snapshot(&mut self) -> Result<()> {
         let db_file = self.dir.join("snapshot.json");
         if db_file.exists() {
@@ -47,42 +44,40 @@ impl VulnerabilityDb {
         }
         Ok(())
     }
-    
+
     pub async fn update(&mut self) -> Result<SnapshotMeta> {
         // Phase 2 stub: In a real implementation this would fetch OSV zip files and parse them.
         // Here we just write a dummy snapshot.
-        let dummy_advisories = vec![
-            Advisory {
-                id: "CVE-2023-12345".to_string(),
-                aliases: vec![],
-                severity: crate::Severity::High,
-                affected_purls: vec!["pkg:deb/debian/bash".to_string()],
-                fixed_version: Some("5.1-6".to_string()),
-            }
-        ];
-        
+        let dummy_advisories = vec![Advisory {
+            id: "CVE-2023-12345".to_string(),
+            aliases: vec![],
+            severity: crate::Severity::High,
+            affected_purls: vec!["pkg:deb/debian/bash".to_string()],
+            fixed_version: Some("5.1-6".to_string()),
+        }];
+
         let db_file = self.dir.join("snapshot.json");
         let data = serde_json::to_string_pretty(&dummy_advisories)?;
         fs::write(&db_file, data).await?;
-        
+
         self.advisories = dummy_advisories;
-        
+
         Ok(SnapshotMeta {
             updated_at: chrono::Utc::now().to_rfc3339(),
             entries_count: self.advisories.len(),
         })
     }
-    
+
     pub fn get_advisories(&self) -> &[Advisory] {
         &self.advisories
     }
-    
+
     pub fn status(&self) -> Result<Option<SnapshotMeta>> {
         let db_file = self.dir.join("snapshot.json");
         if !db_file.exists() {
             return Ok(None);
         }
-        
+
         // Return dummy meta for now based on file modification time
         if let Ok(meta) = std::fs::metadata(&db_file) {
             let updated_at = meta.modified().unwrap_or_else(|_| std::time::SystemTime::now());
@@ -92,7 +87,7 @@ impl VulnerabilityDb {
                 entries_count: self.advisories.len(),
             }));
         }
-        
+
         Ok(None)
     }
 }

@@ -1,8 +1,8 @@
+use flate2::read::GzDecoder;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::io::Read;
-use flate2::read::GzDecoder;
+use std::path::{Path, PathBuf};
 use tar::Archive;
 
 #[derive(Debug, Clone)]
@@ -29,16 +29,20 @@ pub enum FsError {
 
 pub type Result<T> = std::result::Result<T, FsError>;
 
+impl Default for FileInventory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileInventory {
     pub fn new() -> Self {
-        Self {
-            files: HashMap::new(),
-        }
+        Self { files: HashMap::new() }
     }
 
     pub fn apply_layer(&mut self, tar_path: &Path, layer_digest: &str) -> Result<()> {
         let file = File::open(tar_path)?;
-        
+
         let mut is_gz = false;
         let mut magic = [0u8; 2];
         let mut f_probe = File::open(tar_path)?;
@@ -54,11 +58,15 @@ impl FileInventory {
             let mut archive = Archive::new(file);
             self.process_entries(&mut archive, layer_digest)?;
         }
-        
+
         Ok(())
     }
 
-    fn process_entries<R: Read>(&mut self, archive: &mut Archive<R>, layer_digest: &str) -> Result<()> {
+    fn process_entries<R: Read>(
+        &mut self,
+        archive: &mut Archive<R>,
+        layer_digest: &str,
+    ) -> Result<()> {
         for entry in archive.entries()? {
             let entry = entry?;
             let path = entry.path()?.to_path_buf();
@@ -70,26 +78,28 @@ impl FileInventory {
                 continue;
             }
 
-            if file_name.starts_with(".wh.") {
-                let target_name = &file_name[4..];
+            if let Some(target_name) = file_name.strip_prefix(".wh.") {
                 let target_path = parent.join(target_name);
                 self.files.remove(&target_path);
                 self.files.retain(|p, _| !p.starts_with(&target_path));
                 continue;
             }
 
-            self.files.insert(path, FileMetadata {
-                layer_digest: layer_digest.to_string(),
-                size: entry.header().size().unwrap_or(0),
-                mode: entry.header().mode().unwrap_or(0),
-            });
+            self.files.insert(
+                path,
+                FileMetadata {
+                    layer_digest: layer_digest.to_string(),
+                    size: entry.header().size().unwrap_or(0),
+                    mode: entry.header().mode().unwrap_or(0),
+                },
+            );
         }
         Ok(())
     }
 
     pub fn extract_file(&self, target_path: &Path, layer_tar_path: &Path) -> Result<Vec<u8>> {
         let file = File::open(layer_tar_path)?;
-        
+
         let mut is_gz = false;
         let mut magic = [0u8; 2];
         let mut f_probe = File::open(layer_tar_path)?;
@@ -100,19 +110,27 @@ impl FileInventory {
         let extract = |archive: &mut Archive<&mut dyn Read>| -> Result<Option<Vec<u8>>> {
             let max_uncompressed = 1_000_000_000; // 1GB bomb limit
             let mut total_size = 0;
-            
+
             for entry in archive.entries()? {
                 let mut entry = entry?;
                 let path = entry.path()?.to_path_buf();
-                
+
                 // Security: Reject escaping paths
-                if path.is_absolute() || path.components().any(|c| c == std::path::Component::ParentDir) {
-                    return Err(FsError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "Hostile tar entry")));
+                if path.is_absolute()
+                    || path.components().any(|c| c == std::path::Component::ParentDir)
+                {
+                    return Err(FsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Hostile tar entry",
+                    )));
                 }
-                
+
                 total_size += entry.size();
                 if total_size > max_uncompressed {
-                    return Err(FsError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "Decompression bomb detected")));
+                    return Err(FsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Decompression bomb detected",
+                    )));
                 }
 
                 if path == target_path {
@@ -136,7 +154,10 @@ impl FileInventory {
 
         match result? {
             Some(data) => Ok(data),
-            None => Err(FsError::ExtractFailed(format!("File {} not found in archive", target_path.display())))
+            None => Err(FsError::ExtractFailed(format!(
+                "File {} not found in archive",
+                target_path.display()
+            ))),
         }
     }
 }

@@ -7,7 +7,7 @@ description: |
   equivalent. It generates SBOMs, matches vulnerabilities, prunes, and signs the output.
 
 grade: stable
-confinement: classic
+confinement: strict
 
 parts:
   bedrock:

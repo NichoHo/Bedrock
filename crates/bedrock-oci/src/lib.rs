@@ -1,14 +1,14 @@
 pub mod cache;
+pub mod layout;
 pub mod manifest;
 pub mod reference;
 pub mod registry;
-pub mod layout;
 
 pub use cache::Cache;
-pub use manifest::{Manifest, Descriptor};
+pub use layout::OciLayout;
+pub use manifest::{Descriptor, Manifest};
 pub use reference::ImageReference;
 pub use registry::RegistryClient;
-pub use layout::OciLayout;
 
 #[derive(thiserror::Error, Debug)]
 pub enum OciError {
