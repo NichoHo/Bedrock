@@ -1,0 +1,12 @@
+[package]
+name = "bedrock-sbom"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bedrock-fs = { path = "../bedrock-fs" }
+bedrock-oci = { path = "../bedrock-oci" }
+url = "2.5" # for purl parsing if needed

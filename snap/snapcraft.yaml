@@ -1,0 +1,22 @@
+name: bedrock
+base: core22
+version: '0.1.0'
+summary: A container image reduction tool
+description: |
+  Bedrock traces container workloads and removes unused files to create a distroless
+  equivalent. It generates SBOMs, matches vulnerabilities, prunes, and signs the output.
+
+grade: stable
+confinement: classic
+
+parts:
+  bedrock:
+    plugin: rust
+    source: .
+    build-packages:
+      - pkg-config
+      - libssl-dev
+
+apps:
+  bedrock:
+    command: bin/bedrock

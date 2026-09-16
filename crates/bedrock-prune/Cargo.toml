@@ -1,0 +1,14 @@
+[package]
+name = "bedrock-prune"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.8"
+bedrock-fs = { path = "../bedrock-fs" }
+bedrock-trace = { path = "../bedrock-trace" }
+bedrock-sbom = { path = "../bedrock-sbom" }
+bedrock-vuln = { path = "../bedrock-vuln" }

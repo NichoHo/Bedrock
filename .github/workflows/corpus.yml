@@ -1,0 +1,23 @@
+name: Weekly Corpus Test
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # Every Sunday at midnight
+  workflow_dispatch:
+
+jobs:
+  test-corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Bedrock
+        run: cargo build --release
+
+      - name: Run Corpus
+        run: |
+          echo "Status: Not yet implemented"
+          exit 4
