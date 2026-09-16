@@ -188,9 +188,8 @@ async fn run() -> Result<()> {
                         println!("Failed to read index.json");
                     }
                 },
-                ImageReference::DockerArchive(path) => {
-                    println!("Docker Archive: {}", path.display());
-                    println!("(Archive parsing not implemented yet)");
+                ImageReference::DockerArchive(_path) => {
+                    anyhow::bail!("not implemented");
                 }
             }
         },
@@ -238,7 +237,7 @@ async fn run() -> Result<()> {
                     }
                 }
                 _ => {
-                    println!("Error: SBOM generation currently only implemented for local OCI layouts in Phase 1 stub.");
+                    anyhow::bail!("not implemented");
                 }
             }
         },
@@ -257,98 +256,8 @@ async fn run() -> Result<()> {
                 }
             }
         },
-        Commands::Scan { image, fail_on, format } => {
-            let _cache = Cache::new().await.context("Failed to initialize cache")?;
-            let reference = ImageReference::parse(image);
-            let mut inventory = FileInventory::new();
-            
-            match reference {
-                ImageReference::OciLayout(path) => {
-                    let layout = bedrock_oci::OciLayout::new(&path);
-                    if let Ok(manifests) = layout.read_index().await {
-                        if let Some(desc) = manifests.first() {
-                            if let Ok(manifest) = layout.read_manifest(&desc.digest).await {
-                                for layer in manifest.layers {
-                                    let blob_path = layout.get_blob_path(&layer.digest);
-                                    if blob_path.exists() {
-                                        let _ = inventory.apply_layer(&blob_path, &layer.digest);
-                                    }
-                                }
-                                
-                                let resolver = |digest: &str| -> Option<std::path::PathBuf> {
-                                    let bp = layout.get_blob_path(digest);
-                                    if bp.exists() { Some(bp) } else { None }
-                                };
-                                
-                                let mut packages = Vec::new();
-                                packages.extend(bedrock_sbom::dpkg::parse_dpkg(&inventory, &resolver).unwrap_or_default());
-                                packages.extend(bedrock_sbom::apk::parse_apk(&inventory, &resolver).unwrap_or_default());
-                                packages.extend(bedrock_sbom::node::parse_node(&inventory).unwrap_or_default());
-                                packages.extend(bedrock_sbom::python::parse_python(&inventory).unwrap_or_default());
-                                
-                                let db = bedrock_vuln::VulnerabilityDb::new().await.context("Failed to init DB")?;
-                                if db.get_advisories().is_empty() {
-                                    println!("Warning: Vulnerability database is empty. Run `bedrock db update`.");
-                                }
-                                
-                                let scanner = bedrock_vuln::Scanner::new(&db);
-                                let findings = scanner.scan(&packages);
-                                
-                                if format == "sarif" {
-                                    // Dummy SARIF output for Phase 2
-                                    let sarif = serde_json::json!({
-                                        "version": "2.1.0",
-                                        "runs": [{
-                                            "tool": {
-                                                "driver": {
-                                                    "name": "Bedrock Scanner"
-                                                }
-                                            },
-                                            "results": findings.iter().map(|f| {
-                                                serde_json::json!({
-                                                    "ruleId": f.advisory_id,
-                                                    "message": {
-                                                        "text": format!("{} in {}", f.advisory_id, f.package_name)
-                                                    }
-                                                })
-                                            }).collect::<Vec<_>>()
-                                        }]
-                                    });
-                                    println!("{}", serde_json::to_string_pretty(&sarif).unwrap());
-                                } else {
-                                    println!("Scan Results:");
-                                    if findings.is_empty() {
-                                        println!("  No vulnerabilities found.");
-                                    } else {
-                                        for f in &findings {
-                                            println!("  [{:?}] {} in {}@{} (Fixed: {:?})", 
-                                                f.severity, f.advisory_id, f.package_name, f.package_version, f.fixed_version);
-                                        }
-                                    }
-                                }
-                                
-                                if let Some(fail_sev_str) = fail_on {
-                                    let fail_sev = match fail_sev_str.to_lowercase().as_str() {
-                                        "low" => bedrock_vuln::Severity::Low,
-                                        "medium" => bedrock_vuln::Severity::Medium,
-                                        "high" => bedrock_vuln::Severity::High,
-                                        "critical" => bedrock_vuln::Severity::Critical,
-                                        _ => bedrock_vuln::Severity::Low,
-                                    };
-                                    
-                                    let has_failure = findings.iter().any(|f| f.severity >= fail_sev);
-                                    if has_failure {
-                                        std::process::exit(1);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    println!("Error: Scan currently only implemented for local OCI layouts in Phase 2 stub.");
-                }
-            }
+        Commands::Scan { .. } => {
+            anyhow::bail!("not implemented");
         },
         Commands::Trace { .. } => {
             anyhow::bail!("not implemented");
