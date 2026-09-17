@@ -1,0 +1,8 @@
+C:\Users\Nicholas Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\deps\icu_normalizer-a41fe4f7f0eb2840.d: C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\lib.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\properties.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\provider.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\uts46.rs
+
+C:\Users\Nicholas Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\deps\libicu_normalizer-a41fe4f7f0eb2840.rmeta: C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\lib.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\properties.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\provider.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\uts46.rs
+
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\lib.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\properties.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\provider.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\icu_normalizer-2.3.0\src\uts46.rs:

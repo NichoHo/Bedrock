@@ -37,6 +37,10 @@ pub fn write_spdx(sbom: &Sbom) -> String {
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": "Bedrock-SBOM",
         "documentNamespace": "http://spdx.org/spdxdocs/bedrock-sbom-1.0",
+        "creationInfo": {
+            "creators": ["Tool: Bedrock"],
+            "created": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        },
         "packages": packages,
         "relationships": relationships
     });

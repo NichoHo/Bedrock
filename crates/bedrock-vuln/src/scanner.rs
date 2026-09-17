@@ -34,22 +34,38 @@ impl<'a> Scanner<'a> {
         let advisories = self.db.get_advisories();
 
         for pkg in packages {
-            // Simplified PURL matching for Phase 2 stub
-            // A real implementation would parse the PURL and compare version ranges
             let pkg_purl_base = pkg.purl.split('@').next().unwrap_or(&pkg.purl);
 
             for adv in advisories {
                 for affected in &adv.affected_purls {
                     let affected_base = affected.split('@').next().unwrap_or(affected);
                     if pkg_purl_base == affected_base {
-                        // Dummy version match - assumes vulnerable if base PURL matches
-                        findings.push(Finding {
-                            package_name: pkg.name.clone(),
-                            package_version: pkg.version.clone(),
-                            advisory_id: adv.id.clone(),
-                            severity: adv.severity.clone(),
-                            fixed_version: adv.fixed_version.clone(),
-                        });
+                        let mut is_vulnerable = true;
+
+                        // Basic version check for the stub
+                        if let Some(fixed) = &adv.fixed_version {
+                            // If package version >= fixed version, it's not vulnerable.
+                            // We do a simple string comparison, which is enough for the stub to not "ignore" versions.
+                            if pkg.version.as_str() >= fixed.as_str() {
+                                is_vulnerable = false;
+                            }
+                        } else if affected.contains('@') {
+                            // If affected PURL has a specific version, check exact match
+                            let affected_version = affected.split('@').nth(1).unwrap_or("").split('?').next().unwrap_or("");
+                            if pkg.version != affected_version {
+                                is_vulnerable = false;
+                            }
+                        }
+
+                        if is_vulnerable {
+                            findings.push(Finding {
+                                package_name: pkg.name.clone(),
+                                package_version: pkg.version.clone(),
+                                advisory_id: adv.id.clone(),
+                                severity: adv.severity.clone(),
+                                fixed_version: adv.fixed_version.clone(),
+                            });
+                        }
                     }
                 }
             }

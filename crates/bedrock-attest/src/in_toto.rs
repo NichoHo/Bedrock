@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Statement<T> {
     #[serde(rename = "_type")]
     pub _type: String,
     pub subject: Vec<Subject>,
-    #[serde(rename = "predicateType")]
     pub predicate_type: String,
     pub predicate: T,
 }

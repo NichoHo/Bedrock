@@ -24,6 +24,8 @@ pub enum OciError {
     BlobNotFound(String),
     #[error("Manifest not found")]
     ManifestNotFound,
+    #[error("Invalid digest: {0}")]
+    InvalidDigest(String),
     #[error("Unsupported media type: {0}")]
     UnsupportedMediaType(String),
 }

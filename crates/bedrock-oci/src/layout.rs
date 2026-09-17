@@ -25,8 +25,7 @@ impl OciLayout {
     }
 
     pub async fn read_manifest(&self, digest: &str) -> Result<Manifest> {
-        let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
-        let manifest_path = self.path.join("blobs").join("sha256").join(digest_clean);
+        let manifest_path = self.get_blob_path(digest)?;
 
         // Try reading it. For our dummy layouts, it might not exist or be empty.
         match fs::read_to_string(&manifest_path).await {
@@ -42,8 +41,11 @@ impl OciLayout {
         }
     }
 
-    pub fn get_blob_path(&self, digest: &str) -> PathBuf {
+    pub fn get_blob_path(&self, digest: &str) -> Result<PathBuf> {
         let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
-        self.path.join("blobs").join("sha256").join(digest_clean)
+        if digest_clean.len() != 64 || !digest_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(crate::OciError::InvalidDigest("Invalid digest format".into()));
+        }
+        Ok(self.path.join("blobs").join("sha256").join(digest_clean))
     }
 }

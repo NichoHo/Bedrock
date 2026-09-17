@@ -26,16 +26,40 @@ impl RegistryClient {
     }
 
     pub async fn authenticate(&mut self) -> Result<()> {
-        // Very basic auth for docker.io
-        if self.registry == "registry-1.docker.io" {
-            let auth_url = format!(
-                "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{}:pull",
-                self.repository
-            );
-            let resp = self.client.get(&auth_url).send().await?;
-            if resp.status().is_success() {
-                let token_resp: TokenResponse = resp.json().await?;
-                self.token = token_resp.token.or(token_resp.access_token);
+        let ping_url = format!("https://{}/v2/", self.registry);
+        let resp = self.client.get(&ping_url).send().await?;
+        
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(auth_header) = resp.headers().get("Www-Authenticate") {
+                if let Ok(auth_str) = auth_header.to_str() {
+                    if auth_str.starts_with("Bearer ") {
+                        let params = auth_str.trim_start_matches("Bearer ");
+                        let mut realm = "";
+                        let mut service = "";
+                        
+                        for part in params.split(',') {
+                            let part = part.trim();
+                            if let Some(r) = part.strip_prefix("realm=\"") {
+                                realm = r.trim_end_matches('"');
+                            } else if let Some(s) = part.strip_prefix("service=\"") {
+                                service = s.trim_end_matches('"');
+                            }
+                        }
+                        
+                        if !realm.is_empty() {
+                            let mut auth_url = format!("{}?scope=repository:{}:pull", realm, self.repository);
+                            if !service.is_empty() {
+                                auth_url.push_str(&format!("&service={}", service));
+                            }
+                            
+                            let token_resp = self.client.get(&auth_url).send().await?;
+                            if token_resp.status().is_success() {
+                                let tr: TokenResponse = token_resp.json().await?;
+                                self.token = tr.token.or(tr.access_token);
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(())

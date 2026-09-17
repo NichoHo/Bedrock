@@ -35,6 +35,14 @@ impl MarkdownRenderer {
 
 pub struct HtmlRenderer;
 
+fn escape_html(s: &str) -> String {
+    s.replace("&", "&amp;")
+     .replace("<", "&lt;")
+     .replace(">", "&gt;")
+     .replace("\"", "&quot;")
+     .replace("'", "&#x27;")
+}
+
 impl HtmlRenderer {
     pub fn render(evidence: &[RemovalEvidence], original_size: u64, new_size: u64) -> String {
         let mut out = String::new();
@@ -52,7 +60,10 @@ impl HtmlRenderer {
         for e in evidence {
             out.push_str(&format!(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                e.package_name, e.removed_files, e.kept_files, e.reason
+                escape_html(&e.package_name),
+                e.removed_files,
+                e.kept_files,
+                escape_html(&e.reason)
             ));
         }
 

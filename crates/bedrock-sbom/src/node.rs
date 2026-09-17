@@ -12,7 +12,7 @@ pub fn parse_node(inventory: &bedrock_fs::FileInventory) -> Result<Vec<Package>>
             let mut name = "unknown";
             // usually .../node_modules/<name>/package.json
             for i in 0..parts.len() {
-                if parts[i] == "node_modules" && i + 2 == parts.len() {
+                if parts[i] == "node_modules" && i + 3 == parts.len() {
                     name = parts[i + 1];
                     break;
                 }

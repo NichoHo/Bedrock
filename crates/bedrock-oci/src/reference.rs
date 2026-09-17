@@ -29,11 +29,12 @@ impl ImageReference {
             ("registry-1.docker.io".to_string(), input.to_string())
         };
 
-        let repo_parts: Vec<&str> = rest.split(':').collect();
-        let (repository, tag) = if repo_parts.len() == 2 {
-            (repo_parts[0].to_string(), repo_parts[1].to_string())
+        let (repository, tag) = if let Some(idx) = rest.find('@') {
+            (rest[..idx].to_string(), rest[idx + 1..].to_string())
+        } else if let Some(idx) = rest.find(':') {
+            (rest[..idx].to_string(), rest[idx + 1..].to_string())
         } else {
-            (rest, "latest".to_string())
+            (rest.to_string(), "latest".to_string())
         };
 
         let repository = if registry == "registry-1.docker.io" && !repository.contains('/') {

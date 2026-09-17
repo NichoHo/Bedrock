@@ -62,7 +62,20 @@ impl KeepSet {
             }
         }
 
-        Self { paths }
+        let mut final_paths = HashSet::new();
+        for p in &paths {
+            let mut current = p.as_path();
+            final_paths.insert(current.to_path_buf());
+            while let Some(parent) = current.parent() {
+                if parent.as_os_str().is_empty() || parent == Path::new("/") {
+                    break;
+                }
+                final_paths.insert(parent.to_path_buf());
+                current = parent;
+            }
+        }
+
+        Self { paths: final_paths }
     }
 }
 

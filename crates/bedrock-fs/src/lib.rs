@@ -69,19 +69,27 @@ impl FileInventory {
     ) -> Result<()> {
         for entry in archive.entries()? {
             let entry = entry?;
-            let path = entry.path()?.to_path_buf();
+            let raw_path = entry.path()?;
+            let path = Self::normalize_path(&raw_path);
             let file_name = path.file_name().unwrap_or_default().to_string_lossy();
             let parent = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
 
             if file_name == ".wh..wh..opq" {
-                self.files.retain(|p, _| !p.starts_with(&parent));
+                self.files.retain(|p, meta| {
+                    if p.starts_with(&parent) && p != &parent {
+                        meta.layer_digest == layer_digest
+                    } else {
+                        true
+                    }
+                });
                 continue;
             }
 
             if let Some(target_name) = file_name.strip_prefix(".wh.") {
-                let target_path = parent.join(target_name);
-                self.files.remove(&target_path);
-                self.files.retain(|p, _| !p.starts_with(&target_path));
+                if !target_name.is_empty() {
+                    let target_path = parent.join(target_name);
+                    self.files.retain(|p, _| !p.starts_with(&target_path));
+                }
                 continue;
             }
 
@@ -97,6 +105,21 @@ impl FileInventory {
         Ok(())
     }
 
+    fn normalize_path(path: &Path) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::CurDir => {}
+                std::path::Component::Normal(c) => normalized.push(c),
+                std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
+            }
+        }
+        normalized
+    }
+
     pub fn extract_file(&self, target_path: &Path, layer_tar_path: &Path) -> Result<Vec<u8>> {
         let file = File::open(layer_tar_path)?;
 
@@ -107,23 +130,27 @@ impl FileInventory {
             is_gz = true;
         }
 
+        let target_norm = Self::normalize_path(target_path);
+
         let extract = |archive: &mut Archive<&mut dyn Read>| -> Result<Option<Vec<u8>>> {
             let max_uncompressed = 1_000_000_000; // 1GB bomb limit
             let mut total_size = 0;
 
             for entry in archive.entries()? {
                 let mut entry = entry?;
-                let path = entry.path()?.to_path_buf();
-
-                // Security: Reject escaping paths
-                if path.is_absolute()
-                    || path.components().any(|c| c == std::path::Component::ParentDir)
+                let raw_path = entry.path()?;
+                
+                // Security: Reject escaping paths early
+                if raw_path.is_absolute()
+                    || raw_path.components().any(|c| c == std::path::Component::ParentDir)
                 {
                     return Err(FsError::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "Hostile tar entry",
                     )));
                 }
+
+                let path = Self::normalize_path(&raw_path);
 
                 total_size += entry.size();
                 if total_size > max_uncompressed {
@@ -133,7 +160,7 @@ impl FileInventory {
                     )));
                 }
 
-                if path == target_path {
+                if path == target_norm {
                     let mut buf = Vec::new();
                     entry.read_to_end(&mut buf)?;
                     return Ok(Some(buf));
@@ -159,5 +186,71 @@ impl FileInventory {
                 target_path.display()
             ))),
         }
+    }
+
+    pub fn extract_files(&self, target_paths: &[&Path], layer_tar_path: &Path) -> Result<HashMap<PathBuf, Vec<u8>>> {
+        let file = File::open(layer_tar_path)?;
+
+        let mut is_gz = false;
+        let mut magic = [0u8; 2];
+        let mut f_probe = File::open(layer_tar_path)?;
+        if f_probe.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b] {
+            is_gz = true;
+        }
+
+        let mut target_norms: std::collections::HashSet<PathBuf> = target_paths.iter().map(|p| Self::normalize_path(p)).collect();
+        let mut results = HashMap::new();
+
+        let mut extract = |archive: &mut Archive<&mut dyn Read>| -> Result<()> {
+            let max_uncompressed = 1_000_000_000; // 1GB bomb limit
+            let mut total_size = 0;
+
+            for entry in archive.entries()? {
+                if target_norms.is_empty() {
+                    break; // Found everything we need
+                }
+
+                let mut entry = entry?;
+                let raw_path = entry.path()?;
+                
+                if raw_path.is_absolute()
+                    || raw_path.components().any(|c| c == std::path::Component::ParentDir)
+                {
+                    return Err(FsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Hostile tar entry",
+                    )));
+                }
+
+                let path = Self::normalize_path(&raw_path);
+
+                total_size += entry.size();
+                if total_size > max_uncompressed {
+                    return Err(FsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Decompression bomb detected",
+                    )));
+                }
+
+                if target_norms.remove(&path) {
+                    let mut buf = Vec::new();
+                    entry.read_to_end(&mut buf)?;
+                    results.insert(path, buf);
+                }
+            }
+            Ok(())
+        };
+
+        if is_gz {
+            let mut decoder = GzDecoder::new(file);
+            let mut archive = Archive::new(&mut decoder as &mut dyn Read);
+            extract(&mut archive)?;
+        } else {
+            let mut file_read = file;
+            let mut archive = Archive::new(&mut file_read as &mut dyn Read);
+            extract(&mut archive)?;
+        }
+
+        Ok(results)
     }
 }

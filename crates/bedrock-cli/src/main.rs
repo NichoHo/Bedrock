@@ -143,7 +143,7 @@ async fn run() -> Result<()> {
                             cache.write_blob(&layer.digest, &data).await.context("Failed to write blob")?;
                         }
                         
-                        let blob_path = cache.get_blob_path(&layer.digest);
+                        let blob_path = cache.get_blob_path(&layer.digest).unwrap();
                         inventory.apply_layer(&blob_path, &layer.digest).context("Failed to apply layer to inventory")?;
                     }
                     
@@ -163,7 +163,7 @@ async fn run() -> Result<()> {
                                     for (i, layer) in manifest.layers.iter().enumerate() {
                                         let size_mb = layer.size as f64 / 1_048_576.0;
                                         println!("  Layer {}: {} ({:.2} MB)", i, layer.digest, size_mb);
-                                        let blob_path = layout.get_blob_path(&layer.digest);
+                                        let blob_path = layout.get_blob_path(&layer.digest).unwrap();
                                         if blob_path.exists() {
                                             inventory.apply_layer(&blob_path, &layer.digest).unwrap_or_else(|e| {
                                                 println!("    (Failed to apply layer: {})", e);
@@ -202,36 +202,50 @@ async fn run() -> Result<()> {
             match reference {
                 ImageReference::OciLayout(path) => {
                     let layout = bedrock_oci::OciLayout::new(&path);
-                    if let Ok(manifests) = layout.read_index().await {
-                        if let Some(desc) = manifests.first() {
-                            if let Ok(manifest) = layout.read_manifest(&desc.digest).await {
-                                for layer in manifest.layers {
-                                    let blob_path = layout.get_blob_path(&layer.digest);
-                                    if blob_path.exists() {
-                                        let _ = inventory.apply_layer(&blob_path, &layer.digest);
-                                    }
-                                }
-                                
-                                let resolver = |digest: &str| -> Option<std::path::PathBuf> {
-                                    let bp = layout.get_blob_path(digest);
-                                    if bp.exists() { Some(bp) } else { None }
-                                };
-                                
-                                let mut packages = Vec::new();
-                                packages.extend(bedrock_sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_default());
-                                packages.extend(bedrock_sbom::apk::parse_apk(&inventory, resolver).unwrap_or_default());
-                                packages.extend(bedrock_sbom::node::parse_node(&inventory).unwrap_or_default());
-                                packages.extend(bedrock_sbom::python::parse_python(&inventory).unwrap_or_default());
-                                
-                                let sbom = bedrock_sbom::Sbom { packages };
-                                
-                                if format == "cyclonedx" {
-                                    println!("{}", bedrock_sbom::cyclonedx::write_cyclonedx(&sbom));
-                                } else {
-                                    println!("{}", bedrock_sbom::spdx::write_spdx(&sbom));
-                                }
+                    let manifests = layout.read_index().await.context("Failed to read index.json")?;
+                    let desc = manifests.first().context("No manifests found in index.json")?;
+                    let manifest = layout.read_manifest(&desc.digest).await.context("Failed to read manifest")?;
+                    
+                    for layer in manifest.layers {
+                        if let Ok(blob_path) = layout.get_blob_path(&layer.digest) {
+                            if blob_path.exists() {
+                                let _ = inventory.apply_layer(&blob_path, &layer.digest);
                             }
                         }
+                    }
+                    
+                    let resolver = |digest: &str| -> Option<std::path::PathBuf> {
+                        if let Ok(bp) = layout.get_blob_path(digest) {
+                            if bp.exists() { Some(bp) } else { None }
+                        } else {
+                            None
+                        }
+                    };
+                    
+                    let mut packages = Vec::new();
+                    packages.extend(bedrock_sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_else(|e| {
+                        eprintln!("Warning: failed to parse dpkg: {}", e);
+                        Vec::new()
+                    }));
+                    packages.extend(bedrock_sbom::apk::parse_apk(&inventory, resolver).unwrap_or_else(|e| {
+                        eprintln!("Warning: failed to parse apk: {}", e);
+                        Vec::new()
+                    }));
+                    packages.extend(bedrock_sbom::node::parse_node(&inventory).unwrap_or_else(|e| {
+                        eprintln!("Warning: failed to parse node: {}", e);
+                        Vec::new()
+                    }));
+                    packages.extend(bedrock_sbom::python::parse_python(&inventory).unwrap_or_else(|e| {
+                        eprintln!("Warning: failed to parse python: {}", e);
+                        Vec::new()
+                    }));
+                    
+                    let sbom = bedrock_sbom::Sbom { packages };
+                    
+                    if format == "cyclonedx" {
+                        println!("{}", bedrock_sbom::cyclonedx::write_cyclonedx(&sbom));
+                    } else {
+                        println!("{}", bedrock_sbom::spdx::write_spdx(&sbom));
                     }
                 }
                 _ => {

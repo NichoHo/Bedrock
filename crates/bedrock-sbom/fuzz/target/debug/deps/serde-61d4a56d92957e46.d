@@ -1,0 +1,12 @@
+C:\Users\Nicholas Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\deps\serde-61d4a56d92957e46.d: C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\lib.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\integer128.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\mod.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\de.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\ser.rs C:\Users\Nicholas\ Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\build\serde-774097fa1c790350\out/private.rs
+
+C:\Users\Nicholas Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\deps\libserde-61d4a56d92957e46.rmeta: C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\lib.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\integer128.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\mod.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\de.rs C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\ser.rs C:\Users\Nicholas\ Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\build\serde-774097fa1c790350\out/private.rs
+
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\lib.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\integer128.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\mod.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\de.rs:
+C:\Users\Nicholas\ Ho\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.229\src\private\ser.rs:
+C:\Users\Nicholas\ Ho\Documents\Programming\Project\Bedrock\crates\bedrock-sbom\fuzz\target\debug\build\serde-774097fa1c790350\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\Nicholas Ho\\Documents\\Programming\\Project\\Bedrock\\crates\\bedrock-sbom\\fuzz\\target\\debug\\build\\serde-774097fa1c790350\\out
