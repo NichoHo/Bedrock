@@ -9,7 +9,10 @@ thiserror = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+# rustls instead of the default native-tls: avoids linking OpenSSL, which is
+# what makes musl cross-builds (the release target the snap package uses)
+# fragile without a vendored OpenSSL build.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 flate2 = "1.0"
 tar = "0.4"
 sha2 = "0.10"

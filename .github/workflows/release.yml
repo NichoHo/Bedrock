@@ -31,10 +31,24 @@ jobs:
       - name: Run tests (Self-test)
         run: cross test --release --target ${{ matrix.target }}
 
+      # The three matrix jobs all produce a binary literally named `bedrock`;
+      # uploading that name from every job would have each release asset
+      # overwrite the last. Renaming to include the target triple, and
+      # publishing a checksum alongside it, so `cosign`/`sha256sum -c`
+      # verification (SECURITY.md) has something real to check once signing
+      # exists.
+      - name: Package
+        run: |
+          asset="bedrock-${{ matrix.target }}"
+          cp target/${{ matrix.target }}/release/bedrock "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          files: target/${{ matrix.target }}/release/bedrock
+          files: |
+            bedrock-${{ matrix.target }}
+            bedrock-${{ matrix.target }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

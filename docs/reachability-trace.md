@@ -1,13 +1,17 @@
-# Reachability Trace: What it Catches, What it Misses, and the Numbers
+# Reachability Trace (planned): What it Will Catch and Miss
 
 ## Overview
-Bedrock’s reachability trace leverages Linux `ptrace` to dynamically observe what files an application touches during a workload run. This trace constructs the "ReachSet" which forms the baseline of the pruning phase.
+Bedrock's reachability trace is meant to use Linux `ptrace` to dynamically observe
+what files an application touches during a workload run, building a "ReachSet"
+that the pruning phase uses as its baseline.
 
 ## Status
 
-Reachability tracing is currently a stub. The descriptions of `ptrace` hooking, symlink-chain resolution, static `DT_NEEDED` dependencies, and dynamic shared library capture represent the target architecture from Phase 3 of the project specification.
-
-At present, tracing returns an empty `ReachSet` and does not actually perform the operations listed below.
+Not implemented. `bedrock trace` and `bedrock slim` both exit 4 ("not
+implemented"). The descriptions below are the target design from Phase 3 of
+[`BEDROCK_SPEC.md`](../BEDROCK_SPEC.md), not a description of current
+behavior — there is no numbers section here yet because there's nothing to
+measure.
 
 ## Planned Features
 

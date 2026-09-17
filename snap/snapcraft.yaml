@@ -6,16 +6,21 @@ description: |
   Bedrock traces container workloads and removes unused files to create a distroless
   equivalent. It generates SBOMs, matches vulnerabilities, prunes, and signs the output.
 
-grade: stable
+  Status: early development. `inspect`, `sbom`, and `db status` work; every other
+  command reports "not implemented" (exit 4). See the project's BEDROCK_SPEC.md.
+
+# Not "stable": most of the CLI surface documented above isn't implemented yet.
+grade: devel
 confinement: strict
 
 parts:
   bedrock:
     plugin: rust
-    source: .
-    build-packages:
-      - pkg-config
-      - libssl-dev
+    # The crate to build, not the workspace root (which has no [package] of
+    # its own to install).
+    source: crates/bedrock-cli
+    # No build-packages: reqwest is built with rustls (not native-tls), so
+    # there's no OpenSSL to link against and nothing here needs pkg-config.
 
 apps:
   bedrock:

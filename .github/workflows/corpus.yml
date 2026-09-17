@@ -1,15 +1,17 @@
 name: Weekly Corpus Test
 
+# No `schedule` trigger yet: the corpus itself (BEDROCK_SPEC.md Phase 6) isn't
+# implemented, and a job that's guaranteed to fail on a schedule is noise, not
+# signal. Re-add `schedule: - cron: '0 0 * * 0'` once `Run Corpus` below does
+# something real.
 on:
-  schedule:
-    - cron: '0 0 * * 0' # Every Sunday at midnight
   workflow_dispatch:
 
 jobs:
   test-corpus:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

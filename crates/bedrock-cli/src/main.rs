@@ -109,13 +109,6 @@ fn not_implemented<T>(what: &'static str) -> Result<T> {
     Err(NotImplemented(what).into())
 }
 
-/// Like [`not_implemented`] but for a case whose detail isn't known until
-/// runtime (e.g. which archive path was given); reported via `context()`
-/// rather than baked into the `&'static str`.
-fn not_implemented_ctx<T>(what: &'static str, detail: impl std::fmt::Display) -> Result<T> {
-    Err(NotImplemented(what)).with_context(|| detail.to_string())
-}
-
 /// Resolves a blob digest to its local path on disk.
 type BlobPathFn = Box<dyn Fn(&str) -> Result<PathBuf>>;
 
@@ -164,9 +157,7 @@ fn resolve_image(
                 layout.resolve_manifest(os, arch).context("failed to resolve manifest")?;
             Ok((manifest, Box::new(move |digest: &str| layout.get_blob_path(digest))))
         }
-        ImageReference::DockerArchive(path) => {
-            not_implemented_ctx("Docker save-format archives", path.display())
-        }
+        ImageReference::DockerArchive(_) => not_implemented("Docker save-format archives"),
     }
 }
 
@@ -214,11 +205,7 @@ fn parse_all_packages(
 
 fn main() {
     if let Err(e) = run() {
-        // Walk the whole cause chain, not just the outermost error: `.context()`
-        // wraps the original error rather than replacing it, so a bare
-        // `downcast_ref` on `e` itself would miss a `NotImplemented` raised
-        // beneath any `.context(...)` call — as `not_implemented_ctx` does.
-        if let Some(ni) = e.chain().find_map(|c| c.downcast_ref::<NotImplemented>()) {
+        if let Some(ni) = e.downcast_ref::<NotImplemented>() {
             eprintln!("Error: {ni}");
             std::process::exit(4);
         }

@@ -140,6 +140,19 @@ and key-based signing elsewhere. It does not manage keys for you.
 
 One binary, one crate workspace, no daemon.
 
+**Current status:** the crate split below is the destination, not where the
+code is today. Splitting into ten crates before there's working code in most
+of them (currently: `oci`, `fs`, `sbom`, `vuln` — see the README for what's
+implemented) means the crate boundary changes with almost every phase and
+each split adds a workspace member, a Cargo.toml, and an error enum. As of
+this writing the implemented pieces live as modules in a single crate
+(`crates/bedrock-cli`, with a `src/lib.rs` so it's usable from tests and fuzz
+targets, and a thin `src/main.rs` binary). Splitting a module out into its own
+crate happens when it's grown a real, stable API surface that something else
+needs to depend on independently — starting with `bedrock-trace` once Phase 3
+exists, since it's the one piece the spec's own dependency graph (below) shows
+nothing else needs to compile against.
+
 ```
 bedrock/
   crates/
