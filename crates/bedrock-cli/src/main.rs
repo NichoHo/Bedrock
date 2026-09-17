@@ -1,7 +1,17 @@
+pub mod fs;
+pub mod oci;
+pub mod sbom;
+pub mod vuln;
+pub mod trace;
+pub mod prune;
+pub mod verify;
+pub mod attest;
+pub mod report;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use bedrock_oci::{Cache, ImageReference, RegistryClient};
-use bedrock_fs::FileInventory;
+use crate::oci::{Cache, ImageReference, RegistryClient};
+use crate::fs::FileInventory;
 
 #[derive(Parser)]
 #[command(name = "bedrock")]
@@ -98,9 +108,8 @@ enum DbAction {
     Status,
 }
 
-#[tokio::main]
-async fn main() {
-    if let Err(e) = run().await {
+fn main() {
+    if let Err(e) = run() {
         if e.to_string() == "not implemented" {
             eprintln!("Error: not implemented");
             std::process::exit(4);
@@ -111,12 +120,12 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<()> {
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
         Commands::Inspect { image } => {
-            let cache = Cache::new().await.context("Failed to initialize cache")?;
+            let cache = Cache::new().context("Failed to initialize cache")?;
             
             let reference = ImageReference::parse(image);
             match reference {
@@ -125,10 +134,10 @@ async fn run() -> Result<()> {
                     println!("Tag: {}", tag);
                     
                     let mut client = RegistryClient::new(&registry, &repository);
-                    client.authenticate().await.context("Authentication failed")?;
+                    client.authenticate().context("Authentication failed")?;
                     
                     println!("Fetching manifest...");
-                    let manifest = client.fetch_manifest(&tag).await.context("Failed to fetch manifest")?;
+                    let manifest = client.fetch_manifest(&tag).context("Failed to fetch manifest")?;
                     
                     println!("Layers:");
                     let mut inventory = FileInventory::new();
@@ -137,10 +146,10 @@ async fn run() -> Result<()> {
                         let size_mb = layer.size as f64 / 1_048_576.0;
                         println!("  Layer {}: {} ({:.2} MB)", i, layer.digest, size_mb);
                         
-                        if !cache.blob_exists(&layer.digest).await {
+                        if !cache.blob_exists(&layer.digest) {
                             println!("    Downloading blob...");
-                            let data = client.fetch_blob(&layer.digest).await.context("Failed to fetch blob")?;
-                            cache.write_blob(&layer.digest, &data).await.context("Failed to write blob")?;
+                            let blob_path = cache.get_blob_path(&layer.digest).unwrap();
+                            client.fetch_blob(&layer.digest, &blob_path).context("Failed to fetch blob")?;
                         }
                         
                         let blob_path = cache.get_blob_path(&layer.digest).unwrap();
@@ -152,12 +161,12 @@ async fn run() -> Result<()> {
                 },
                 ImageReference::OciLayout(path) => {
                     println!("OCI Layout: {}", path.display());
-                    let layout = bedrock_oci::OciLayout::new(&path);
+                    let layout = crate::oci::OciLayout::new(&path);
                     
-                    if let Ok(manifests) = layout.read_index().await {
+                    if let Ok(manifests) = layout.read_index() {
                         if let Some(desc) = manifests.first() {
                             println!("Using manifest digest: {}", desc.digest);
-                            match layout.read_manifest(&desc.digest).await {
+                            match layout.read_manifest(&desc.digest) {
                                 Ok(manifest) => {
                                     let mut inventory = FileInventory::new();
                                     for (i, layer) in manifest.layers.iter().enumerate() {
@@ -192,7 +201,7 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Sbom { image, format } => {
-            let _cache = Cache::new().await.context("Failed to initialize cache")?;
+            let _cache = Cache::new().context("Failed to initialize cache")?;
             let reference = ImageReference::parse(image);
             
             // Helper function to build inventory and get resolver
@@ -201,10 +210,10 @@ async fn run() -> Result<()> {
             
             match reference {
                 ImageReference::OciLayout(path) => {
-                    let layout = bedrock_oci::OciLayout::new(&path);
-                    let manifests = layout.read_index().await.context("Failed to read index.json")?;
+                    let layout = crate::oci::OciLayout::new(&path);
+                    let manifests = layout.read_index().context("Failed to read index.json")?;
                     let desc = manifests.first().context("No manifests found in index.json")?;
-                    let manifest = layout.read_manifest(&desc.digest).await.context("Failed to read manifest")?;
+                    let manifest = layout.read_manifest(&desc.digest).context("Failed to read manifest")?;
                     
                     for layer in manifest.layers {
                         if let Ok(blob_path) = layout.get_blob_path(&layer.digest) {
@@ -223,29 +232,29 @@ async fn run() -> Result<()> {
                     };
                     
                     let mut packages = Vec::new();
-                    packages.extend(bedrock_sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_else(|e| {
+                    packages.extend(crate::sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to parse dpkg: {}", e);
                         Vec::new()
                     }));
-                    packages.extend(bedrock_sbom::apk::parse_apk(&inventory, resolver).unwrap_or_else(|e| {
+                    packages.extend(crate::sbom::apk::parse_apk(&inventory, resolver).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to parse apk: {}", e);
                         Vec::new()
                     }));
-                    packages.extend(bedrock_sbom::node::parse_node(&inventory).unwrap_or_else(|e| {
+                    packages.extend(crate::sbom::node::parse_node(&inventory).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to parse node: {}", e);
                         Vec::new()
                     }));
-                    packages.extend(bedrock_sbom::python::parse_python(&inventory).unwrap_or_else(|e| {
+                    packages.extend(crate::sbom::python::parse_python(&inventory).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to parse python: {}", e);
                         Vec::new()
                     }));
                     
-                    let sbom = bedrock_sbom::Sbom { packages };
+                    let sbom = crate::sbom::Sbom { packages };
                     
                     if format == "cyclonedx" {
-                        println!("{}", bedrock_sbom::cyclonedx::write_cyclonedx(&sbom));
+                        println!("{}", crate::sbom::cyclonedx::write_cyclonedx(&sbom));
                     } else {
-                        println!("{}", bedrock_sbom::spdx::write_spdx(&sbom));
+                        println!("{}", crate::sbom::spdx::write_spdx(&sbom));
                     }
                 }
                 _ => {
@@ -254,7 +263,7 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Db { action } => {
-            let db = bedrock_vuln::VulnerabilityDb::new().await.context("Failed to init DB")?;
+            let db = crate::vuln::VulnerabilityDb::new().context("Failed to init DB")?;
             match action {
                 DbAction::Update => {
                     anyhow::bail!("not implemented");
@@ -263,7 +272,7 @@ async fn run() -> Result<()> {
                     if let Some(meta) = db.status().context("Failed to check DB status")? {
                         println!("Database status: {} entries. Last update: {}", meta.entries_count, meta.updated_at);
                     } else {
-                        println!("Database is empty. Run `bedrock db update`.");
+                        println!("Database is empty. Run edrock db update.");
                     }
                 }
             }
