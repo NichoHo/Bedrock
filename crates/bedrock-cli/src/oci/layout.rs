@@ -1,13 +1,8 @@
+use crate::oci::manifest::resolve_manifest;
 use crate::oci::{Manifest, OciError};
-use anyhow::Result;
-use serde::Deserialize;
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Deserialize)]
-struct OciIndex {
-    manifests: Vec<crate::oci::manifest::Descriptor>,
-}
 
 pub struct OciLayout {
     path: PathBuf,
@@ -18,28 +13,11 @@ impl OciLayout {
         Self { path: path.to_path_buf() }
     }
 
-    pub fn read_index(&self) -> Result<Vec<crate::oci::manifest::Descriptor>> {
-        let index_path = self.path.join("index.json");
-        let data = fs::read_to_string(&index_path).map_err(OciError::Io)?;
-        let index: OciIndex = serde_json::from_str(&data)?;
-        Ok(index.manifests)
-    }
-
-    pub fn read_manifest(&self, digest: &str) -> Result<Manifest> {
-        let manifest_path = self.get_blob_path(digest)?;
-
-        // Try reading it. For our dummy layouts, it might not exist or be empty.
-        match fs::read_to_string(&manifest_path) {
-            Ok(data) => {
-                let manifest: Manifest = serde_json::from_str(&data)?;
-                Ok(manifest)
-            }
-            Err(_) => {
-                // If it fails, maybe return a dummy for now since we just created dummy layouts.
-                // But in a real scenario we error out.
-                Err(OciError::ManifestNotFound.into())
-            }
-        }
+    /// True only for a directory that actually looks like an OCI image layout
+    /// (has an `oci-layout` marker file), so an arbitrary directory that
+    /// happens to share a name with a registry image isn't misread as one.
+    pub fn looks_like_layout(path: &Path) -> bool {
+        path.join("oci-layout").is_file()
     }
 
     pub fn get_blob_path(&self, digest: &str) -> Result<PathBuf> {
@@ -50,5 +28,20 @@ impl OciLayout {
             )));
         }
         Ok(self.path.join("blobs").join("sha256").join(digest_clean))
+    }
+
+    fn read_blob(&self, digest: &str) -> Result<Vec<u8>> {
+        let path = self.get_blob_path(digest)?;
+        fs::read(&path).map_err(|e| OciError::Io(e).into())
+    }
+
+    /// Reads `index.json` and resolves it (following one level of nested index,
+    /// if present) down to the manifest for the requested platform.
+    pub fn resolve_manifest(&self, os: &str, arch: &str) -> Result<Manifest> {
+        let index_path = self.path.join("index.json");
+        let index_data =
+            fs::read(&index_path).with_context(|| format!("reading {}", index_path.display()))?;
+        resolve_manifest(&index_data, os, arch, |digest| self.read_blob(digest))
+            .context("failed to resolve a manifest from index.json")
     }
 }

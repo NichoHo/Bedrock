@@ -1,0 +1,28 @@
+[package]
+name = "bedrock-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Opts this crate out of the parent workspace (in addition to the parent's own
+# `exclude`), matching the standard cargo-fuzz layout.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bedrock = { path = ".." }
+
+[[bin]]
+name = "dpkg_fuzzer"
+path = "fuzz_targets/dpkg_fuzzer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "apk_fuzzer"
+path = "fuzz_targets/apk_fuzzer.rs"
+test = false
+doc = false

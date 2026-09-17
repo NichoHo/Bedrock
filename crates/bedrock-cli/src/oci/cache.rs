@@ -2,6 +2,7 @@ use crate::Result;
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Cache {
     blobs_dir: PathBuf,
 }
@@ -25,32 +26,30 @@ impl Cache {
     }
 
     pub fn blob_exists(&self, digest: &str) -> bool {
-        if let Ok(path) = self.get_blob_path(digest) {
-            fs::metadata(&path).is_ok()
-        } else {
-            false
+        match self.get_blob_path(digest) {
+            Ok(path) => fs::metadata(&path).is_ok(),
+            Err(_) => false,
         }
     }
+}
 
-    pub fn write_blob(&self, digest: &str, data: &[u8]) -> Result<()> {
-        let path = self.get_blob_path(digest)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let hash = hex::encode(hasher.finalize());
-        if hash != digest_clean {
-            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest(format!(
-                "Digest mismatch: expected {}, got {}",
-                digest_clean, hash
-            ))));
-        }
+    #[test]
+    fn rejects_malformed_digest() {
+        let cache = Cache { blobs_dir: PathBuf::from("/tmp/bedrock-test") };
+        assert!(cache.get_blob_path("not-a-digest").is_err());
+        assert!(cache.get_blob_path("sha256:tooshort").is_err());
+        assert!(cache.get_blob_path(&format!("sha256:{}", "g".repeat(64))).is_err());
+    }
 
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, data)?;
-        Ok(())
+    #[test]
+    fn accepts_valid_digest_with_or_without_prefix() {
+        let cache = Cache { blobs_dir: PathBuf::from("/tmp/bedrock-test") };
+        let hex64 = "a".repeat(64);
+        assert!(cache.get_blob_path(&hex64).is_ok());
+        assert!(cache.get_blob_path(&format!("sha256:{hex64}")).is_ok());
     }
 }

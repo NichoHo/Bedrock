@@ -1,4 +1,4 @@
-use crate::sbom::Sbom;
+use crate::sbom::{document_id, Sbom};
 use serde_json::json;
 
 pub fn write_cyclonedx(sbom: &Sbom) -> String {
@@ -16,7 +16,10 @@ pub fn write_cyclonedx(sbom: &Sbom) -> String {
     let doc = json!({
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
-        "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+        // Must be unique per document (CycloneDX requires a distinct serial
+        // number per BOM); a fixed value reused across every SBOM Bedrock
+        // emits would make them indistinguishable.
+        "serialNumber": format!("urn:uuid:{}", document_id()),
         "version": 1,
         "components": components
     });

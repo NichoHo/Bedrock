@@ -2,6 +2,10 @@
 members = [
     "crates/bedrock-cli"
 ]
+# The fuzz crate is a separate, nightly-only cargo-fuzz project (its own
+# Cargo.toml already opts out via an empty [workspace] table); excluding it
+# here too keeps `cargo build --workspace` on stable from tripping over it.
+exclude = ["crates/bedrock-cli/fuzz"]
 resolver = "2"
 
 [profile.release]

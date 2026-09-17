@@ -6,7 +6,7 @@ pub mod registry;
 
 pub use cache::Cache;
 pub use layout::OciLayout;
-pub use manifest::{Descriptor, Manifest};
+pub use manifest::Manifest;
 pub use reference::ImageReference;
 pub use registry::RegistryClient;
 
@@ -18,16 +18,10 @@ pub enum OciError {
     Network(#[from] reqwest::Error),
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("Invalid image reference: {0}")]
-    InvalidReference(String),
     #[error("Blob not found: {0}")]
     BlobNotFound(String),
     #[error("Manifest not found")]
     ManifestNotFound,
     #[error("Invalid digest: {0}")]
     InvalidDigest(String),
-    #[error("Unsupported media type: {0}")]
-    UnsupportedMediaType(String),
 }
-
-pub type Result<T> = std::result::Result<T, OciError>;

@@ -5,14 +5,24 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Directory,
+    Symlink(PathBuf),
+    HardLink(PathBuf),
+    Other,
+}
+
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
     pub layer_digest: String,
     pub size: u64,
     pub mode: u32,
+    pub kind: EntryKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FileInventory {
     pub files: HashMap<PathBuf, FileMetadata>,
 }
@@ -21,60 +31,77 @@ pub struct FileInventory {
 pub enum FsError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("File not found in inventory: {0}")]
-    FileNotFound(PathBuf),
     #[error("Failed to extract file: {0}")]
     ExtractFailed(String),
+    #[error("Hostile tar entry: {0}")]
+    HostileEntry(PathBuf),
+    #[error("Decompression bomb detected (uncompressed size exceeds {0} bytes)")]
+    DecompressionBomb(u64),
 }
 
 pub type Result<T> = std::result::Result<T, FsError>;
 
-impl Default for FileInventory {
-    fn default() -> Self {
-        Self::new()
+/// Maximum bytes a single layer may expand to while being walked or extracted.
+const MAX_UNCOMPRESSED_BYTES: u64 = 1_000_000_000;
+
+/// Rejects absolute paths and any path containing a `..` component. Untrusted
+/// tar entries must be rejected outright rather than silently rewritten:
+/// normalizing `../../etc/passwd` down to `etc/passwd` would make a hostile
+/// entry look legitimate instead of refusing it.
+fn reject_hostile_path(path: &Path) -> Result<()> {
+    if path.is_absolute() || path.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err(FsError::HostileEntry(path.to_path_buf()));
     }
+    Ok(())
+}
+
+/// Strips a leading `./` (or repeated `./`) so `./var/lib/dpkg/status` and
+/// `var/lib/dpkg/status` land on the same inventory key. Callers must run
+/// [`reject_hostile_path`] first; this does not defend against `..` or
+/// absolute paths.
+fn strip_leading_curdir(path: &Path) -> PathBuf {
+    path.components().skip_while(|c| *c == std::path::Component::CurDir).collect()
+}
+
+/// Opens `tar_path` as a tar stream, transparently gunzipping if the file
+/// starts with the gzip magic bytes.
+fn open_archive(tar_path: &Path) -> Result<Archive<Box<dyn Read>>> {
+    let mut probe = File::open(tar_path)?;
+    let mut magic = [0u8; 2];
+    let is_gz = probe.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b];
+
+    let file = File::open(tar_path)?;
+    let reader: Box<dyn Read> = if is_gz { Box::new(GzDecoder::new(file)) } else { Box::new(file) };
+    Ok(Archive::new(reader))
 }
 
 impl FileInventory {
     pub fn new() -> Self {
-        Self { files: HashMap::new() }
+        Self::default()
     }
 
     pub fn apply_layer(&mut self, tar_path: &Path, layer_digest: &str) -> Result<()> {
-        let file = File::open(tar_path)?;
+        let mut archive = open_archive(tar_path)?;
+        let mut total_size: u64 = 0;
 
-        let mut is_gz = false;
-        let mut magic = [0u8; 2];
-        let mut f_probe = File::open(tar_path)?;
-        if f_probe.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b] {
-            is_gz = true;
-        }
-
-        if is_gz {
-            let decoder = GzDecoder::new(file);
-            let mut archive = Archive::new(decoder);
-            self.process_entries(&mut archive, layer_digest)?;
-        } else {
-            let mut archive = Archive::new(file);
-            self.process_entries(&mut archive, layer_digest)?;
-        }
-
-        Ok(())
-    }
-
-    fn process_entries<R: Read>(
-        &mut self,
-        archive: &mut Archive<R>,
-        layer_digest: &str,
-    ) -> Result<()> {
         for entry in archive.entries()? {
             let entry = entry?;
             let raw_path = entry.path()?;
-            let path = Self::normalize_path(&raw_path);
-            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+            reject_hostile_path(&raw_path)?;
+            let path = strip_leading_curdir(&raw_path);
+
+            total_size += entry.size();
+            if total_size > MAX_UNCOMPRESSED_BYTES {
+                return Err(FsError::DecompressionBomb(MAX_UNCOMPRESSED_BYTES));
+            }
+
+            let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             let parent = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
 
             if file_name == ".wh..wh..opq" {
+                // Opaque whiteout: everything already recorded under this directory
+                // from an earlier (lower) layer is hidden, unless this same layer
+                // also re-added it.
                 self.files.retain(|p, meta| {
                     if p.starts_with(&parent) && p != &parent {
                         meta.layer_digest == layer_digest
@@ -93,169 +120,174 @@ impl FileInventory {
                 continue;
             }
 
+            let kind = match entry.header().entry_type() {
+                tar::EntryType::Directory => EntryKind::Directory,
+                tar::EntryType::Symlink => EntryKind::Symlink(
+                    entry.link_name()?.map(|l| l.to_path_buf()).unwrap_or_default(),
+                ),
+                tar::EntryType::Link => EntryKind::HardLink(
+                    entry.link_name()?.map(|l| l.to_path_buf()).unwrap_or_default(),
+                ),
+                tar::EntryType::Regular => EntryKind::File,
+                _ => EntryKind::Other,
+            };
+
             self.files.insert(
                 path,
                 FileMetadata {
                     layer_digest: layer_digest.to_string(),
                     size: entry.header().size().unwrap_or(0),
                     mode: entry.header().mode().unwrap_or(0),
+                    kind,
                 },
             );
         }
         Ok(())
     }
 
-    fn normalize_path(path: &Path) -> PathBuf {
-        let mut normalized = PathBuf::new();
-        for component in path.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                std::path::Component::CurDir => {}
-                std::path::Component::Normal(c) => normalized.push(c),
-                std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
-            }
-        }
-        normalized
-    }
-
-    pub fn extract_file(&self, target_path: &Path, layer_tar_path: &Path) -> Result<Vec<u8>> {
-        let file = File::open(layer_tar_path)?;
-
-        let mut is_gz = false;
-        let mut magic = [0u8; 2];
-        let mut f_probe = File::open(layer_tar_path)?;
-        if f_probe.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b] {
-            is_gz = true;
-        }
-
-        let target_norm = Self::normalize_path(target_path);
-
-        let extract = |archive: &mut Archive<&mut dyn Read>| -> Result<Option<Vec<u8>>> {
-            let max_uncompressed = 1_000_000_000; // 1GB bomb limit
-            let mut total_size = 0;
-
-            for entry in archive.entries()? {
-                let mut entry = entry?;
-                let raw_path = entry.path()?;
-
-                // Security: Reject escaping paths early
-                if raw_path.is_absolute()
-                    || raw_path.components().any(|c| c == std::path::Component::ParentDir)
-                {
-                    return Err(FsError::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Hostile tar entry",
-                    )));
-                }
-
-                let path = Self::normalize_path(&raw_path);
-
-                total_size += entry.size();
-                if total_size > max_uncompressed {
-                    return Err(FsError::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Decompression bomb detected",
-                    )));
-                }
-
-                if path == target_norm {
-                    let mut buf = Vec::new();
-                    entry.read_to_end(&mut buf)?;
-                    return Ok(Some(buf));
-                }
-            }
-            Ok(None)
-        };
-
-        let result = if is_gz {
-            let mut decoder = GzDecoder::new(file);
-            let mut archive = Archive::new(&mut decoder as &mut dyn Read);
-            extract(&mut archive)
-        } else {
-            let mut file_read = file;
-            let mut archive = Archive::new(&mut file_read as &mut dyn Read);
-            extract(&mut archive)
-        };
-
-        match result? {
-            Some(data) => Ok(data),
-            None => Err(FsError::ExtractFailed(format!(
-                "File {} not found in archive",
-                target_path.display()
-            ))),
-        }
-    }
-
+    /// Extracts the raw bytes of every path in `target_paths` from a single
+    /// layer tarball, in one pass over the archive.
     pub fn extract_files(
         &self,
         target_paths: &[&Path],
         layer_tar_path: &Path,
     ) -> Result<HashMap<PathBuf, Vec<u8>>> {
-        let file = File::open(layer_tar_path)?;
-
-        let mut is_gz = false;
-        let mut magic = [0u8; 2];
-        let mut f_probe = File::open(layer_tar_path)?;
-        if f_probe.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b] {
-            is_gz = true;
-        }
-
-        let mut target_norms: std::collections::HashSet<PathBuf> =
-            target_paths.iter().map(|p| Self::normalize_path(p)).collect();
+        let mut archive = open_archive(layer_tar_path)?;
+        let mut remaining: std::collections::HashSet<PathBuf> =
+            target_paths.iter().map(|p| strip_leading_curdir(p)).collect();
         let mut results = HashMap::new();
+        let mut total_size: u64 = 0;
 
-        let mut extract = |archive: &mut Archive<&mut dyn Read>| -> Result<()> {
-            let max_uncompressed = 1_000_000_000; // 1GB bomb limit
-            let mut total_size = 0;
-
-            for entry in archive.entries()? {
-                if target_norms.is_empty() {
-                    break; // Found everything we need
-                }
-
-                let mut entry = entry?;
-                let raw_path = entry.path()?;
-
-                if raw_path.is_absolute()
-                    || raw_path.components().any(|c| c == std::path::Component::ParentDir)
-                {
-                    return Err(FsError::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Hostile tar entry",
-                    )));
-                }
-
-                let path = Self::normalize_path(&raw_path);
-
-                total_size += entry.size();
-                if total_size > max_uncompressed {
-                    return Err(FsError::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Decompression bomb detected",
-                    )));
-                }
-
-                if target_norms.remove(&path) {
-                    let mut buf = Vec::new();
-                    entry.read_to_end(&mut buf)?;
-                    results.insert(path, buf);
-                }
+        for entry in archive.entries()? {
+            if remaining.is_empty() {
+                break;
             }
-            Ok(())
-        };
+            let mut entry = entry?;
+            let raw_path = entry.path()?;
+            reject_hostile_path(&raw_path)?;
+            let path = strip_leading_curdir(&raw_path);
 
-        if is_gz {
-            let mut decoder = GzDecoder::new(file);
-            let mut archive = Archive::new(&mut decoder as &mut dyn Read);
-            extract(&mut archive)?;
-        } else {
-            let mut file_read = file;
-            let mut archive = Archive::new(&mut file_read as &mut dyn Read);
-            extract(&mut archive)?;
+            total_size += entry.size();
+            if total_size > MAX_UNCOMPRESSED_BYTES {
+                return Err(FsError::DecompressionBomb(MAX_UNCOMPRESSED_BYTES));
+            }
+
+            if remaining.remove(&path) {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)?;
+                results.insert(path, buf);
+            }
         }
-
         Ok(results)
+    }
+
+    /// Convenience wrapper over [`extract_files`](Self::extract_files) for a
+    /// single path.
+    pub fn extract_file(&self, target_path: &Path, layer_tar_path: &Path) -> Result<Vec<u8>> {
+        let mut results = self.extract_files(&[target_path], layer_tar_path)?;
+        results.remove(&strip_leading_curdir(target_path)).ok_or_else(|| {
+            FsError::ExtractFailed(format!("{} not found in archive", target_path.display()))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Builds a gzipped tar with the given (name, content) entries. Writes the
+    /// name directly into the raw header bytes rather than going through
+    /// `Header::set_path`/`Builder::append_data`, which validate and reject
+    /// `..` components on write — real hostile tarballs aren't built with this
+    /// crate's writer, so tests for the reader's own defenses need a way to
+    /// produce a `..` entry at all.
+    fn write_tar_gz(entries: &[(&str, &[u8])]) -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let encoder =
+            flate2::write::GzEncoder::new(file.reopen().unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        for (name, data) in entries {
+            let mut header = tar::Header::new_gnu();
+            let name_bytes = name.as_bytes();
+            header.as_mut_bytes()[0..name_bytes.len()].copy_from_slice(name_bytes);
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            builder.append(&header, *data).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap().flush().unwrap();
+        file
+    }
+
+    #[test]
+    fn dot_slash_prefix_normalizes_like_bare_path() {
+        let tar = write_tar_gz(&[("./var/lib/dpkg/status", b"hello")]);
+        let mut inv = FileInventory::new();
+        inv.apply_layer(tar.path(), "sha256:layer1").unwrap();
+        assert!(inv.files.contains_key(Path::new("var/lib/dpkg/status")));
+    }
+
+    #[test]
+    fn parent_dir_component_is_rejected() {
+        let tar = write_tar_gz(&[("../../etc/passwd", b"hostile")]);
+        let mut inv = FileInventory::new();
+        let err = inv.apply_layer(tar.path(), "sha256:layer1").unwrap_err();
+        assert!(matches!(err, FsError::HostileEntry(_)));
+    }
+
+    #[test]
+    fn whiteout_removes_prior_layer_file() {
+        let base = write_tar_gz(&[("etc/foo.conf", b"1")]);
+        let mut inv = FileInventory::new();
+        inv.apply_layer(base.path(), "sha256:layer1").unwrap();
+        assert!(inv.files.contains_key(Path::new("etc/foo.conf")));
+
+        let wh = write_tar_gz(&[("etc/.wh.foo.conf", b"")]);
+        inv.apply_layer(wh.path(), "sha256:layer2").unwrap();
+        assert!(!inv.files.contains_key(Path::new("etc/foo.conf")));
+    }
+
+    #[test]
+    fn opaque_whiteout_clears_directory_from_earlier_layers_only() {
+        let base = write_tar_gz(&[("etc/a", b"1"), ("etc/b", b"2")]);
+        let mut inv = FileInventory::new();
+        inv.apply_layer(base.path(), "sha256:layer1").unwrap();
+
+        let opq = write_tar_gz(&[("etc/.wh..wh..opq", b""), ("etc/c", b"3")]);
+        inv.apply_layer(opq.path(), "sha256:layer2").unwrap();
+
+        assert!(!inv.files.contains_key(Path::new("etc/a")));
+        assert!(!inv.files.contains_key(Path::new("etc/b")));
+        assert!(inv.files.contains_key(Path::new("etc/c")));
+    }
+
+    #[test]
+    fn extract_file_rejects_hostile_entry_even_when_target_is_benign() {
+        let tar = write_tar_gz(&[("../escape", b"x"), ("etc/foo", b"y")]);
+        let inv = FileInventory::new();
+        let err = inv.extract_file(Path::new("etc/foo"), tar.path()).unwrap_err();
+        assert!(matches!(err, FsError::HostileEntry(_)));
+    }
+
+    #[test]
+    fn symlink_kind_and_target_are_recorded() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let encoder =
+            flate2::write::GzEncoder::new(file.reopen().unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_cksum();
+        builder.append_link(&mut header, "bin/sh", "busybox").unwrap();
+        builder.into_inner().unwrap().finish().unwrap().flush().unwrap();
+
+        let mut inv = FileInventory::new();
+        inv.apply_layer(file.path(), "sha256:layer1").unwrap();
+        let meta = inv.files.get(Path::new("bin/sh")).unwrap();
+        assert_eq!(meta.kind, EntryKind::Symlink(PathBuf::from("busybox")));
     }
 }
