@@ -29,8 +29,3 @@ impl Verifier {
         Ok(())
     }
 }
-
-
-
-
-

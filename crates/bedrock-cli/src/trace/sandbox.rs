@@ -1,4 +1,5 @@
-use anyhow::Result; use crate::trace::TraceError;
+use crate::trace::TraceError;
+use anyhow::Result;
 use std::path::PathBuf;
 
 pub struct Sandbox {
@@ -38,9 +39,3 @@ impl Sandbox {
         Err(TraceError::UnsupportedPlatform.into())
     }
 }
-
-
-
-
-
-

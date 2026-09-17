@@ -13,8 +13,3 @@ pub struct TraceConfig {
     pub ready_port: Option<u16>,
     pub ready_log_pattern: Option<String>,
 }
-
-
-
-
-

@@ -1,10 +1,11 @@
-use crate::sbom::Package; use anyhow::Result;
+use crate::sbom::Package;
+use anyhow::Result;
 
 pub fn parse_node(inventory: &crate::fs::FileInventory) -> Result<Vec<Package>> {
     let mut packages = Vec::new();
     // For node, we look for package.json in node_modules
     for path in inventory.files.keys() {
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().replace('\\', "/");
         if path_str.contains("node_modules") && path_str.ends_with("package.json") {
             // Very naive parser for phase 1
             // In a real implementation we would extract and read the package.json
@@ -32,8 +33,3 @@ pub fn parse_node(inventory: &crate::fs::FileInventory) -> Result<Vec<Package>> 
     }
     Ok(packages)
 }
-
-
-
-
-

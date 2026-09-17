@@ -1,4 +1,5 @@
-use crate::sbom::{Package, SbomError}; use anyhow::Result;
+use crate::sbom::{Package, SbomError};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 pub fn parse_dpkg<F>(inventory: &crate::fs::FileInventory, resolver: F) -> Result<Vec<Package>>
@@ -22,7 +23,8 @@ where
     let mut packages = parse_status(&status_text);
 
     // Group lists by layer to avoid quadratic extraction
-    let mut lists_by_layer: std::collections::HashMap<String, Vec<(PathBuf, usize)>> = std::collections::HashMap::new();
+    let mut lists_by_layer: std::collections::HashMap<String, Vec<(PathBuf, usize)>> =
+        std::collections::HashMap::new();
 
     for (i, pkg) in packages.iter().enumerate() {
         let name = &pkg.name;
@@ -82,7 +84,8 @@ pub fn parse_status(status_text: &str) -> Vec<Package> {
 
     for line in status_text.lines() {
         if line.is_empty() {
-            if let (Some(name), Some(ver), Some(arch), Some(status)) = (&current_pkg, &current_ver, &current_arch, &current_status)
+            if let (Some(name), Some(ver), Some(arch), Some(status)) =
+                (&current_pkg, &current_ver, &current_arch, &current_status)
             {
                 push_pkg(name.clone(), ver.clone(), arch.clone(), status.clone());
             }
@@ -105,16 +108,14 @@ pub fn parse_status(status_text: &str) -> Vec<Package> {
     }
 
     // Handle last package if file doesn't end with a blank line
-    if let (Some(name), Some(ver), Some(arch), Some(status)) = (&current_pkg, &current_ver, &current_arch, &current_status) {
+    if let (Some(name), Some(ver), Some(arch), Some(status)) =
+        (&current_pkg, &current_ver, &current_arch, &current_status)
+    {
         push_pkg(name.clone(), ver.clone(), arch.clone(), status.clone());
     }
 
     packages
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -148,11 +149,11 @@ Description: add and remove users and groups
 ";
         let pkgs = parse_status(status);
         assert_eq!(pkgs.len(), 2);
-        
+
         assert_eq!(pkgs[0].name, "libacl1");
         assert_eq!(pkgs[0].version, "2.3.1-1");
         assert_eq!(pkgs[0].architecture, Some("amd64".to_string()));
-        
+
         assert_eq!(pkgs[1].name, "adduser");
         assert_eq!(pkgs[1].version, "3.129");
         assert_eq!(pkgs[1].architecture, Some("all".to_string()));

@@ -1,6 +1,6 @@
 use crate::Result;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 pub struct Cache {
     blobs_dir: PathBuf,
@@ -17,7 +17,9 @@ impl Cache {
     pub fn get_blob_path(&self, digest: &str) -> Result<PathBuf> {
         let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
         if digest_clean.len() != 64 || !digest_clean.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest("Invalid digest format".into())));
+            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest(
+                "Invalid digest format".into()
+            )));
         }
         Ok(self.blobs_dir.join("sha256").join(digest_clean))
     }
@@ -32,14 +34,17 @@ impl Cache {
 
     pub fn write_blob(&self, digest: &str, data: &[u8]) -> Result<()> {
         let path = self.get_blob_path(digest)?;
-        
+
         let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(data);
         let hash = hex::encode(hasher.finalize());
         if hash != digest_clean {
-            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest(format!("Digest mismatch: expected {}, got {}", digest_clean, hash))));
+            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest(format!(
+                "Digest mismatch: expected {}, got {}",
+                digest_clean, hash
+            ))));
         }
 
         if let Some(parent) = path.parent() {
@@ -49,10 +54,3 @@ impl Cache {
         Ok(())
     }
 }
-
-
-
-
-
-
-

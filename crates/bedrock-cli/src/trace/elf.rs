@@ -41,8 +41,3 @@ impl ElfClosure {
         &self.paths
     }
 }
-
-
-
-
-

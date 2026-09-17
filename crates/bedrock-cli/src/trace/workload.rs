@@ -1,4 +1,5 @@
-use anyhow::Result; use crate::trace::config::WorkloadKind;
+use crate::trace::config::WorkloadKind;
+use anyhow::Result;
 
 pub struct WorkloadRunner {
     kind: WorkloadKind,
@@ -25,8 +26,3 @@ impl WorkloadRunner {
         Ok(())
     }
 }
-
-
-
-
-

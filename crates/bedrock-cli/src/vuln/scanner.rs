@@ -1,5 +1,5 @@
-use crate::vuln::db::VulnerabilityDb;
 use crate::sbom::Package;
+use crate::vuln::db::VulnerabilityDb;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -51,7 +51,13 @@ impl<'a> Scanner<'a> {
                             }
                         } else if affected.contains('@') {
                             // If affected PURL has a specific version, check exact match
-                            let affected_version = affected.split('@').nth(1).unwrap_or("").split('?').next().unwrap_or("");
+                            let affected_version = affected
+                                .split('@')
+                                .nth(1)
+                                .unwrap_or("")
+                                .split('?')
+                                .next()
+                                .unwrap_or("");
                             if pkg.version != affected_version {
                                 is_vulnerable = false;
                             }
@@ -74,8 +80,3 @@ impl<'a> Scanner<'a> {
         findings
     }
 }
-
-
-
-
-

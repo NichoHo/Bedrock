@@ -139,7 +139,7 @@ impl FileInventory {
             for entry in archive.entries()? {
                 let mut entry = entry?;
                 let raw_path = entry.path()?;
-                
+
                 // Security: Reject escaping paths early
                 if raw_path.is_absolute()
                     || raw_path.components().any(|c| c == std::path::Component::ParentDir)
@@ -188,7 +188,11 @@ impl FileInventory {
         }
     }
 
-    pub fn extract_files(&self, target_paths: &[&Path], layer_tar_path: &Path) -> Result<HashMap<PathBuf, Vec<u8>>> {
+    pub fn extract_files(
+        &self,
+        target_paths: &[&Path],
+        layer_tar_path: &Path,
+    ) -> Result<HashMap<PathBuf, Vec<u8>>> {
         let file = File::open(layer_tar_path)?;
 
         let mut is_gz = false;
@@ -198,7 +202,8 @@ impl FileInventory {
             is_gz = true;
         }
 
-        let mut target_norms: std::collections::HashSet<PathBuf> = target_paths.iter().map(|p| Self::normalize_path(p)).collect();
+        let mut target_norms: std::collections::HashSet<PathBuf> =
+            target_paths.iter().map(|p| Self::normalize_path(p)).collect();
         let mut results = HashMap::new();
 
         let mut extract = |archive: &mut Archive<&mut dyn Read>| -> Result<()> {
@@ -212,7 +217,7 @@ impl FileInventory {
 
                 let mut entry = entry?;
                 let raw_path = entry.path()?;
-                
+
                 if raw_path.is_absolute()
                     || raw_path.components().any(|c| c == std::path::Component::ParentDir)
                 {
@@ -254,8 +259,3 @@ impl FileInventory {
         Ok(results)
     }
 }
-
-
-
-
-

@@ -2,7 +2,6 @@ pub mod in_toto;
 pub mod sigstore;
 pub mod slsa;
 
-
 #[derive(thiserror::Error, Debug)]
 pub enum AttestError {
     #[error("I/O error: {0}")]
@@ -14,8 +13,3 @@ pub enum AttestError {
 }
 
 pub type Result<T> = std::result::Result<T, AttestError>;
-
-
-
-
-

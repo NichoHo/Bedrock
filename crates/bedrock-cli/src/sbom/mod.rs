@@ -33,8 +33,3 @@ pub enum SbomError {
 }
 
 pub type Result<T> = std::result::Result<T, SbomError>;
-
-
-
-
-

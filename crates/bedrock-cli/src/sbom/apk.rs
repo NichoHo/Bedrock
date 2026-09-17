@@ -1,4 +1,5 @@
-use crate::sbom::{Package, SbomError}; use anyhow::Result;
+use crate::sbom::{Package, SbomError};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 pub fn parse_apk<F>(inventory: &crate::fs::FileInventory, resolver: F) -> Result<Vec<Package>>
@@ -19,7 +20,7 @@ where
     let db_data = inventory.extract_file(db_path, &tar_path)?;
     let db_text = String::from_utf8_lossy(&db_data);
 
-        let packages = parse_status(&db_text);
+    let packages = parse_status(&db_text);
     Ok(packages)
 }
 
@@ -87,10 +88,6 @@ pub fn parse_status(db_text: &str) -> Vec<Package> {
     packages
 }
 
-
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,11 +122,11 @@ C:Q1qgW4+bO24G+iR5k8bU/u/5bB+YI=
 ";
         let pkgs = parse_status(status);
         assert_eq!(pkgs.len(), 2);
-        
+
         assert_eq!(pkgs[0].name, "musl");
         assert_eq!(pkgs[0].version, "1.2.4-r2");
         assert_eq!(pkgs[0].architecture, Some("x86_64".to_string()));
-        
+
         assert_eq!(pkgs[1].name, "busybox");
         assert_eq!(pkgs[1].version, "1.36.1-r15");
         assert_eq!(pkgs[1].architecture, Some("x86_64".to_string()));

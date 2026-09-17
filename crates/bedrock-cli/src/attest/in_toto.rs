@@ -39,8 +39,3 @@ impl<T> Statement<T> {
         }
     }
 }
-
-
-
-
-

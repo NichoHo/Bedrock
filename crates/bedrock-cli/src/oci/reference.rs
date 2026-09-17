@@ -46,10 +46,3 @@ impl ImageReference {
         ImageReference::Registry { registry, repository, tag }
     }
 }
-
-
-
-
-
-
-

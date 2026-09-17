@@ -47,8 +47,3 @@ pub fn write_spdx(sbom: &Sbom) -> String {
 
     serde_json::to_string_pretty(&doc).unwrap()
 }
-
-
-
-
-

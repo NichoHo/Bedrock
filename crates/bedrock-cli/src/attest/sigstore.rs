@@ -26,8 +26,3 @@ impl Signer {
         Ok(signature)
     }
 }
-
-
-
-
-

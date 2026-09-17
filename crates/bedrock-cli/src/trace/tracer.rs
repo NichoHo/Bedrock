@@ -1,4 +1,5 @@
-use anyhow::Result; use crate::trace::ReachSet;
+use crate::trace::ReachSet;
+use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -31,8 +32,3 @@ impl Tracer {
         Ok(ReachSet { reached_paths: reached, coverage_ratio: 0.1 })
     }
 }
-
-
-
-
-

@@ -1,7 +1,8 @@
-use crate::oci::{Manifest, OciError}; use anyhow::Result;
+use crate::oci::{Manifest, OciError};
+use anyhow::Result;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 struct OciIndex {
@@ -44,15 +45,10 @@ impl OciLayout {
     pub fn get_blob_path(&self, digest: &str) -> Result<PathBuf> {
         let digest_clean = digest.strip_prefix("sha256:").unwrap_or(digest);
         if digest_clean.len() != 64 || !digest_clean.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest("Invalid digest format".into())));
+            return Err(anyhow::anyhow!(crate::oci::OciError::InvalidDigest(
+                "Invalid digest format".into()
+            )));
         }
         Ok(self.path.join("blobs").join("sha256").join(digest_clean))
     }
 }
-
-
-
-
-
-
-

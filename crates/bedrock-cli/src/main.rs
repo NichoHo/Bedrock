@@ -1,17 +1,17 @@
+pub mod attest;
 pub mod fs;
 pub mod oci;
-pub mod sbom;
-pub mod vuln;
-pub mod trace;
 pub mod prune;
-pub mod verify;
-pub mod attest;
 pub mod report;
+pub mod sbom;
+pub mod trace;
+pub mod verify;
+pub mod vuln;
 
+use crate::fs::FileInventory;
+use crate::oci::{Cache, ImageReference, RegistryClient};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use crate::oci::{Cache, ImageReference, RegistryClient};
-use crate::fs::FileInventory;
 
 #[derive(Parser)]
 #[command(name = "bedrock")]
@@ -99,7 +99,7 @@ enum Commands {
         /// Format (markdown, html)
         #[arg(long, default_value = "markdown")]
         format: String,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -126,43 +126,48 @@ fn run() -> Result<()> {
     match &cli.command {
         Commands::Inspect { image } => {
             let cache = Cache::new().context("Failed to initialize cache")?;
-            
+
             let reference = ImageReference::parse(image);
             match reference {
                 ImageReference::Registry { registry, repository, tag } => {
                     println!("Image: {}/{}", registry, repository);
                     println!("Tag: {}", tag);
-                    
+
                     let mut client = RegistryClient::new(&registry, &repository);
                     client.authenticate().context("Authentication failed")?;
-                    
+
                     println!("Fetching manifest...");
-                    let manifest = client.fetch_manifest(&tag).context("Failed to fetch manifest")?;
-                    
+                    let manifest =
+                        client.fetch_manifest(&tag).context("Failed to fetch manifest")?;
+
                     println!("Layers:");
                     let mut inventory = FileInventory::new();
-                    
+
                     for (i, layer) in manifest.layers.iter().enumerate() {
                         let size_mb = layer.size as f64 / 1_048_576.0;
                         println!("  Layer {}: {} ({:.2} MB)", i, layer.digest, size_mb);
-                        
+
                         if !cache.blob_exists(&layer.digest) {
                             println!("    Downloading blob...");
                             let blob_path = cache.get_blob_path(&layer.digest).unwrap();
-                            client.fetch_blob(&layer.digest, &blob_path).context("Failed to fetch blob")?;
+                            client
+                                .fetch_blob(&layer.digest, &blob_path)
+                                .context("Failed to fetch blob")?;
                         }
-                        
+
                         let blob_path = cache.get_blob_path(&layer.digest).unwrap();
-                        inventory.apply_layer(&blob_path, &layer.digest).context("Failed to apply layer to inventory")?;
+                        inventory
+                            .apply_layer(&blob_path, &layer.digest)
+                            .context("Failed to apply layer to inventory")?;
                     }
-                    
+
                     println!("Inventory:");
                     println!("  Total files: {}", inventory.files.len());
-                },
+                }
                 ImageReference::OciLayout(path) => {
                     println!("OCI Layout: {}", path.display());
                     let layout = crate::oci::OciLayout::new(&path);
-                    
+
                     if let Ok(manifests) = layout.read_index() {
                         if let Some(desc) = manifests.first() {
                             println!("Using manifest digest: {}", desc.digest);
@@ -171,14 +176,23 @@ fn run() -> Result<()> {
                                     let mut inventory = FileInventory::new();
                                     for (i, layer) in manifest.layers.iter().enumerate() {
                                         let size_mb = layer.size as f64 / 1_048_576.0;
-                                        println!("  Layer {}: {} ({:.2} MB)", i, layer.digest, size_mb);
-                                        let blob_path = layout.get_blob_path(&layer.digest).unwrap();
+                                        println!(
+                                            "  Layer {}: {} ({:.2} MB)",
+                                            i, layer.digest, size_mb
+                                        );
+                                        let blob_path =
+                                            layout.get_blob_path(&layer.digest).unwrap();
                                         if blob_path.exists() {
-                                            inventory.apply_layer(&blob_path, &layer.digest).unwrap_or_else(|e| {
-                                                println!("    (Failed to apply layer: {})", e);
-                                            });
+                                            inventory
+                                                .apply_layer(&blob_path, &layer.digest)
+                                                .unwrap_or_else(|e| {
+                                                    println!("    (Failed to apply layer: {})", e);
+                                                });
                                         } else {
-                                            println!("    (Blob not found: {})", blob_path.display());
+                                            println!(
+                                                "    (Blob not found: {})",
+                                                blob_path.display()
+                                            );
                                         }
                                     }
                                     println!("Inventory:");
@@ -194,27 +208,28 @@ fn run() -> Result<()> {
                     } else {
                         println!("Failed to read index.json");
                     }
-                },
+                }
                 ImageReference::DockerArchive(_path) => {
                     anyhow::bail!("not implemented");
                 }
             }
-        },
+        }
         Commands::Sbom { image, format } => {
             let _cache = Cache::new().context("Failed to initialize cache")?;
             let reference = ImageReference::parse(image);
-            
+
             // Helper function to build inventory and get resolver
             // For now, only OciLayout is implemented fully for SBOM since fixtures use it.
             let mut inventory = FileInventory::new();
-            
+
             match reference {
                 ImageReference::OciLayout(path) => {
                     let layout = crate::oci::OciLayout::new(&path);
                     let manifests = layout.read_index().context("Failed to read index.json")?;
                     let desc = manifests.first().context("No manifests found in index.json")?;
-                    let manifest = layout.read_manifest(&desc.digest).context("Failed to read manifest")?;
-                    
+                    let manifest =
+                        layout.read_manifest(&desc.digest).context("Failed to read manifest")?;
+
                     for layer in manifest.layers {
                         if let Ok(blob_path) = layout.get_blob_path(&layer.digest) {
                             if blob_path.exists() {
@@ -222,35 +237,47 @@ fn run() -> Result<()> {
                             }
                         }
                     }
-                    
+
                     let resolver = |digest: &str| -> Option<std::path::PathBuf> {
                         if let Ok(bp) = layout.get_blob_path(digest) {
-                            if bp.exists() { Some(bp) } else { None }
+                            if bp.exists() {
+                                Some(bp)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
                     };
-                    
+
                     let mut packages = Vec::new();
-                    packages.extend(crate::sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_else(|e| {
-                        eprintln!("Warning: failed to parse dpkg: {}", e);
-                        Vec::new()
-                    }));
-                    packages.extend(crate::sbom::apk::parse_apk(&inventory, resolver).unwrap_or_else(|e| {
-                        eprintln!("Warning: failed to parse apk: {}", e);
-                        Vec::new()
-                    }));
-                    packages.extend(crate::sbom::node::parse_node(&inventory).unwrap_or_else(|e| {
-                        eprintln!("Warning: failed to parse node: {}", e);
-                        Vec::new()
-                    }));
-                    packages.extend(crate::sbom::python::parse_python(&inventory).unwrap_or_else(|e| {
-                        eprintln!("Warning: failed to parse python: {}", e);
-                        Vec::new()
-                    }));
-                    
+                    packages.extend(
+                        crate::sbom::dpkg::parse_dpkg(&inventory, resolver).unwrap_or_else(|e| {
+                            eprintln!("Warning: failed to parse dpkg: {}", e);
+                            Vec::new()
+                        }),
+                    );
+                    packages.extend(
+                        crate::sbom::apk::parse_apk(&inventory, resolver).unwrap_or_else(|e| {
+                            eprintln!("Warning: failed to parse apk: {}", e);
+                            Vec::new()
+                        }),
+                    );
+                    packages.extend(crate::sbom::node::parse_node(&inventory).unwrap_or_else(
+                        |e| {
+                            eprintln!("Warning: failed to parse node: {}", e);
+                            Vec::new()
+                        },
+                    ));
+                    packages.extend(crate::sbom::python::parse_python(&inventory).unwrap_or_else(
+                        |e| {
+                            eprintln!("Warning: failed to parse python: {}", e);
+                            Vec::new()
+                        },
+                    ));
+
                     let sbom = crate::sbom::Sbom { packages };
-                    
+
                     if format == "cyclonedx" {
                         println!("{}", crate::sbom::cyclonedx::write_cyclonedx(&sbom));
                     } else {
@@ -261,7 +288,7 @@ fn run() -> Result<()> {
                     anyhow::bail!("not implemented");
                 }
             }
-        },
+        }
         Commands::Db { action } => {
             let db = crate::vuln::VulnerabilityDb::new().context("Failed to init DB")?;
             match action {
@@ -270,25 +297,28 @@ fn run() -> Result<()> {
                 }
                 DbAction::Status => {
                     if let Some(meta) = db.status().context("Failed to check DB status")? {
-                        println!("Database status: {} entries. Last update: {}", meta.entries_count, meta.updated_at);
+                        println!(
+                            "Database status: {} entries. Last update: {}",
+                            meta.entries_count, meta.updated_at
+                        );
                     } else {
                         println!("Database is empty. Run edrock db update.");
                     }
                 }
             }
-        },
+        }
         Commands::Scan { .. } => {
             anyhow::bail!("not implemented");
-        },
+        }
         Commands::Trace { .. } => {
             anyhow::bail!("not implemented");
-        },
+        }
         Commands::Slim { .. } => {
             anyhow::bail!("not implemented");
-        },
+        }
         Commands::Attest { .. } => {
             anyhow::bail!("not implemented");
-        },
+        }
         Commands::Report { .. } => {
             anyhow::bail!("not implemented");
         }

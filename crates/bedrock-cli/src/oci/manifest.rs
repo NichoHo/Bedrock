@@ -24,10 +24,3 @@ pub struct Index {
     pub schema_version: u32,
     pub manifests: Vec<Descriptor>,
 }
-
-
-
-
-
-
-

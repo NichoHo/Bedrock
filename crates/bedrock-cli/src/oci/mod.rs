@@ -31,10 +31,3 @@ pub enum OciError {
 }
 
 pub type Result<T> = std::result::Result<T, OciError>;
-
-
-
-
-
-
-

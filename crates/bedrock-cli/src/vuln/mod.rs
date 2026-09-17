@@ -17,8 +17,3 @@ pub enum VulnError {
 }
 
 pub type Result<T> = std::result::Result<T, VulnError>;
-
-
-
-
-

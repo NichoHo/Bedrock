@@ -37,10 +37,10 @@ pub struct HtmlRenderer;
 
 fn escape_html(s: &str) -> String {
     s.replace("&", "&amp;")
-     .replace("<", "&lt;")
-     .replace(">", "&gt;")
-     .replace("\"", "&quot;")
-     .replace("'", "&#x27;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#x27;")
 }
 
 impl HtmlRenderer {
@@ -71,8 +71,3 @@ impl HtmlRenderer {
         out
     }
 }
-
-
-
-
-
