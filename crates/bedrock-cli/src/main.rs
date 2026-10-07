@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use bedrock::fs::{self, FileInventory};
 use bedrock::oci::{Cache, ImageReference, Manifest, OciLayout, RegistryClient};
 use bedrock::{sbom, vuln};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -22,15 +22,18 @@ enum Commands {
         /// Target platform as os/arch (e.g. linux/arm64)
         #[arg(long, default_value = "linux/amd64")]
         platform: String,
+        #[command(flatten)]
+        limits: LimitArgs,
     },
     /// Emit an SBOM (dpkg, apk, npm, and PyPI packages found in the image)
     Sbom {
         image: String,
-        /// Format: spdx or cyclonedx
-        #[arg(long, default_value = "spdx")]
-        format: String,
+        #[arg(long, value_enum, default_value_t = SbomFormat::Spdx)]
+        format: SbomFormat,
         #[arg(long, default_value = "linux/amd64")]
         platform: String,
+        #[command(flatten)]
+        limits: LimitArgs,
     },
     /// Vulnerability database management
     Db {
@@ -81,6 +84,44 @@ enum Commands {
         #[arg(long, default_value = "markdown")]
         format: String,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SbomFormat {
+    Spdx,
+    Cyclonedx,
+}
+
+/// Decompression-bomb limits on uncompressed layer data.
+#[derive(Args)]
+struct LimitArgs {
+    /// Max uncompressed size of one layer (e.g. 500M, 16G)
+    #[arg(long, value_parser = parse_size, default_value = "16G")]
+    max_layer_size: u64,
+    /// Max uncompressed size of all layers combined (e.g. 64G)
+    #[arg(long, value_parser = parse_size, default_value = "64G")]
+    max_image_size: u64,
+}
+
+impl LimitArgs {
+    fn limits(&self) -> fs::SizeLimits {
+        fs::SizeLimits { per_layer: self.max_layer_size, per_image: self.max_image_size }
+    }
+}
+
+/// Parses a byte count with an optional binary suffix: `1048576`, `512K`, `500M`, `16G`, `1T`.
+fn parse_size(s: &str) -> std::result::Result<u64, String> {
+    let s = s.trim();
+    let (digits, shift) = match s.as_bytes().last().map(u8::to_ascii_uppercase) {
+        Some(b'K') => (&s[..s.len() - 1], 10),
+        Some(b'M') => (&s[..s.len() - 1], 20),
+        Some(b'G') => (&s[..s.len() - 1], 30),
+        Some(b'T') => (&s[..s.len() - 1], 40),
+        _ => (s, 0),
+    };
+    let n: u64 =
+        digits.parse().map_err(|_| format!("invalid size {s:?}, expected e.g. 500M or 16G"))?;
+    n.checked_mul(1 << shift).ok_or_else(|| format!("size {s:?} is too large"))
 }
 
 #[derive(Subcommand)]
@@ -164,8 +205,9 @@ fn resolve_image(
 fn build_inventory(
     manifest: &Manifest,
     blob_path: &dyn Fn(&str) -> Result<PathBuf>,
+    limits: fs::SizeLimits,
 ) -> Result<FileInventory> {
-    let mut inventory = FileInventory::new();
+    let mut inventory = FileInventory::with_limits(limits);
     for layer in &manifest.layers {
         let path = blob_path(&layer.digest)?;
         inventory
@@ -218,7 +260,7 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Inspect { image, platform } => {
+        Commands::Inspect { image, platform, limits } => {
             let (os, arch) = parse_platform(platform)?;
             let cache = Cache::new().context("failed to initialize cache")?;
             let reference = ImageReference::parse(image)?;
@@ -227,15 +269,11 @@ fn run() -> Result<()> {
             let (manifest, blob_path) = resolve_image(&reference, &cache, &os, &arch)?;
 
             println!("Layers:");
-            let mut inventory = FileInventory::new();
             for (i, layer) in manifest.layers.iter().enumerate() {
                 let size_mb = layer.size as f64 / 1_048_576.0;
                 println!("  Layer {}: {} ({:.2} MB)", i, layer.digest, size_mb);
-                let path = blob_path(&layer.digest)?;
-                inventory
-                    .apply_layer(&path, &layer.digest)
-                    .with_context(|| format!("failed to apply layer {}", layer.digest))?;
             }
+            let inventory = build_inventory(&manifest, &*blob_path, limits.limits())?;
 
             let (mut files, mut dirs, mut symlinks, mut other) = (0u64, 0u64, 0u64, 0u64);
             let mut total_bytes = 0u64;
@@ -272,13 +310,13 @@ fn run() -> Result<()> {
                 );
             }
         }
-        Commands::Sbom { image, format, platform } => {
+        Commands::Sbom { image, format, platform, limits } => {
             let (os, arch) = parse_platform(platform)?;
             let cache = Cache::new().context("failed to initialize cache")?;
             let reference = ImageReference::parse(image)?;
 
             let (manifest, blob_path) = resolve_image(&reference, &cache, &os, &arch)?;
-            let inventory = build_inventory(&manifest, &*blob_path)?;
+            let inventory = build_inventory(&manifest, &*blob_path, limits.limits())?;
 
             let resolver = |digest: &str| -> Option<PathBuf> {
                 let p = blob_path(digest).ok()?;
@@ -287,10 +325,9 @@ fn run() -> Result<()> {
             let packages = parse_all_packages(&inventory, resolver);
             let sbom = sbom::Sbom { packages };
 
-            if format == "cyclonedx" {
-                println!("{}", sbom::cyclonedx::write_cyclonedx(&sbom));
-            } else {
-                println!("{}", sbom::spdx::write_spdx(&sbom));
+            match format {
+                SbomFormat::Spdx => println!("{}", sbom::spdx::write_spdx(&sbom)),
+                SbomFormat::Cyclonedx => println!("{}", sbom::cyclonedx::write_cyclonedx(&sbom)),
             }
         }
         Commands::Db { action } => {
@@ -317,4 +354,19 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_size;
+
+    #[test]
+    fn parse_size_handles_suffixes_and_rejects_junk() {
+        assert_eq!(parse_size("1024"), Ok(1024));
+        assert_eq!(parse_size("512k"), Ok(512 << 10));
+        assert_eq!(parse_size("16G"), Ok(16 << 30));
+        assert!(parse_size("G").is_err());
+        assert!(parse_size("1.5G").is_err());
+        assert!(parse_size("99999999999T").is_err());
+    }
 }

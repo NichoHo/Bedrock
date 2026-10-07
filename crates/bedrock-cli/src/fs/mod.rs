@@ -22,9 +22,26 @@ pub struct FileMetadata {
     pub kind: EntryKind,
 }
 
+/// Caps on how much uncompressed data the inventory will walk, to stop
+/// decompression bombs. Both are configurable from the CLI because real
+/// images (CUDA and ML bases especially) legitimately run to many GB.
+#[derive(Debug, Clone, Copy)]
+pub struct SizeLimits {
+    pub per_layer: u64,
+    pub per_image: u64,
+}
+
+impl Default for SizeLimits {
+    fn default() -> Self {
+        Self { per_layer: 16 << 30, per_image: 64 << 30 }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct FileInventory {
     pub files: HashMap<PathBuf, FileMetadata>,
+    limits: SizeLimits,
+    image_bytes: u64,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -35,14 +52,17 @@ pub enum FsError {
     ExtractFailed(String),
     #[error("Hostile tar entry: {0}")]
     HostileEntry(PathBuf),
-    #[error("Decompression bomb detected (uncompressed size exceeds {0} bytes)")]
-    DecompressionBomb(u64),
+    #[error("{0} exceeds the {1}-byte limit (raise it with --max-layer-size / --max-image-size)")]
+    SizeLimit(&'static str, u64),
 }
 
 pub type Result<T> = std::result::Result<T, FsError>;
 
-/// Maximum bytes a single layer may expand to while being walked or extracted.
-const MAX_UNCOMPRESSED_BYTES: u64 = 1_000_000_000;
+/// Largest single file [`FileInventory::extract_files`] will read into memory.
+/// Only package metadata (dpkg status, apk db, package.json) is extracted, so
+/// this sits far above any real one while keeping a hostile multi-GB "status
+/// file" from being buffered whole.
+const MAX_EXTRACTED_FILE_BYTES: u64 = 256 << 20;
 
 /// Rejects absolute paths and any path containing a `..` component. Untrusted
 /// tar entries must be rejected outright rather than silently rewritten:
@@ -80,6 +100,10 @@ impl FileInventory {
         Self::default()
     }
 
+    pub fn with_limits(limits: SizeLimits) -> Self {
+        Self { limits, ..Self::default() }
+    }
+
     pub fn apply_layer(&mut self, tar_path: &Path, layer_digest: &str) -> Result<()> {
         let mut archive = open_archive(tar_path)?;
         let mut total_size: u64 = 0;
@@ -91,8 +115,12 @@ impl FileInventory {
             let path = strip_leading_curdir(&raw_path);
 
             total_size += entry.size();
-            if total_size > MAX_UNCOMPRESSED_BYTES {
-                return Err(FsError::DecompressionBomb(MAX_UNCOMPRESSED_BYTES));
+            self.image_bytes += entry.size();
+            if total_size > self.limits.per_layer {
+                return Err(FsError::SizeLimit("layer", self.limits.per_layer));
+            }
+            if self.image_bytes > self.limits.per_image {
+                return Err(FsError::SizeLimit("image", self.limits.per_image));
             }
 
             let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -132,6 +160,16 @@ impl FileInventory {
                 _ => EntryKind::Other,
             };
 
+            // A non-directory replacing a directory from a lower layer hides
+            // everything that was under it (OCI image spec, "Changesets").
+            // Only checked on a real dir -> non-dir replacement, so normal
+            // layers don't pay for a full scan per entry.
+            if kind != EntryKind::Directory
+                && self.files.get(&path).is_some_and(|m| m.kind == EntryKind::Directory)
+            {
+                self.files.retain(|p, _| !p.starts_with(&path) || p == &path);
+            }
+
             self.files.insert(
                 path,
                 FileMetadata {
@@ -168,11 +206,14 @@ impl FileInventory {
             let path = strip_leading_curdir(&raw_path);
 
             total_size += entry.size();
-            if total_size > MAX_UNCOMPRESSED_BYTES {
-                return Err(FsError::DecompressionBomb(MAX_UNCOMPRESSED_BYTES));
+            if total_size > self.limits.per_layer {
+                return Err(FsError::SizeLimit("layer", self.limits.per_layer));
             }
 
             if remaining.remove(&path) {
+                if entry.size() > MAX_EXTRACTED_FILE_BYTES {
+                    return Err(FsError::SizeLimit("extracted file", MAX_EXTRACTED_FILE_BYTES));
+                }
                 let mut buf = Vec::new();
                 entry.read_to_end(&mut buf)?;
                 results.insert(path, buf);
@@ -261,6 +302,43 @@ mod tests {
         assert!(!inv.files.contains_key(Path::new("etc/a")));
         assert!(!inv.files.contains_key(Path::new("etc/b")));
         assert!(inv.files.contains_key(Path::new("etc/c")));
+    }
+
+    #[test]
+    fn file_replacing_directory_hides_its_children() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let encoder =
+            flate2::write::GzEncoder::new(file.reopen().unwrap(), flate2::Compression::fast());
+        let mut builder = tar::Builder::new(encoder);
+        let mut dir = tar::Header::new_gnu();
+        dir.set_entry_type(tar::EntryType::Directory);
+        dir.set_size(0);
+        dir.set_mode(0o755);
+        builder.append_data(&mut dir, "opt/app", std::io::empty()).unwrap();
+        builder.into_inner().unwrap().finish().unwrap().flush().unwrap();
+
+        let mut inv = FileInventory::new();
+        inv.apply_layer(file.path(), "sha256:layer1").unwrap();
+        let children = write_tar_gz(&[("opt/app/bin", b"x"), ("opt/apple", b"y")]);
+        inv.apply_layer(children.path(), "sha256:layer2").unwrap();
+
+        let replace = write_tar_gz(&[("opt/app", b"now a file")]);
+        inv.apply_layer(replace.path(), "sha256:layer3").unwrap();
+
+        assert_eq!(inv.files[Path::new("opt/app")].kind, EntryKind::File);
+        assert!(!inv.files.contains_key(Path::new("opt/app/bin")));
+        // Component-wise prefix: a sibling sharing a string prefix survives.
+        assert!(inv.files.contains_key(Path::new("opt/apple")));
+    }
+
+    #[test]
+    fn per_image_limit_spans_layers() {
+        let a = write_tar_gz(&[("a", &[0u8; 600])]);
+        let b = write_tar_gz(&[("b", &[0u8; 600])]);
+        let mut inv = FileInventory::with_limits(SizeLimits { per_layer: 1000, per_image: 1000 });
+        inv.apply_layer(a.path(), "sha256:layer1").unwrap();
+        let err = inv.apply_layer(b.path(), "sha256:layer2").unwrap_err();
+        assert!(matches!(err, FsError::SizeLimit("image", 1000)));
     }
 
     #[test]
