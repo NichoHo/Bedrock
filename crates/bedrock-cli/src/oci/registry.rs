@@ -131,27 +131,39 @@ impl RegistryClient {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut file = std::fs::File::create(dest_path)?;
+        // Download to a temp name and rename only after the digest checks out:
+        // the cache treats "file exists at the digest path" as "blob is good",
+        // so a partial write there (killed mid-download) would stick forever.
+        let partial = dest_path.with_extension(format!("{}.partial", std::process::id()));
+        let mut file = std::fs::File::create(&partial)?;
         let mut buf = [0; 8192];
         use std::io::{Read, Write};
         loop {
-            let n = resp.read(&mut buf).context("error reading blob response body")?;
+            let n = match resp.read(&mut buf) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&partial);
+                    return Err(e).context("error reading blob response body");
+                }
+            };
             if n == 0 {
                 break;
             }
             hasher.update(&buf[..n]);
             file.write_all(&buf[..n])?;
         }
+        drop(file);
 
         let hash = hex::encode(hasher.finalize());
         if hash != digest_clean {
-            let _ = std::fs::remove_file(dest_path);
+            let _ = std::fs::remove_file(&partial);
             return Err(anyhow::anyhow!(OciError::InvalidDigest(format!(
                 "Digest mismatch: expected {}, got {}",
                 digest_clean, hash
             ))));
         }
 
+        std::fs::rename(&partial, dest_path)?;
         Ok(())
     }
 }

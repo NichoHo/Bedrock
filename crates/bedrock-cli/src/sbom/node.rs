@@ -9,14 +9,15 @@ struct PackageJson {
 }
 
 /// The `<pkg>` (or `@scope/<pkg>`) component of a
-/// `.../node_modules/<pkg>/package.json` path.
+/// `.../node_modules/<pkg>/package.json` path. Returns `None` for a
+/// `package.json` deeper inside a package (e.g. `node_modules/minipass/dist/esm/package.json`,
+/// a module-type stub), which is not a package of its own.
 fn package_dir_for(path_str: &str) -> Option<&str> {
-    let (before, _) = path_str.rsplit_once("/package.json")?;
+    let before = path_str.strip_suffix("/package.json")?;
     let (_, pkg_dir) = before.rsplit_once("node_modules/")?;
-    // A scoped package's package.json lives at node_modules/@scope/name/package.json;
-    // pkg_dir is already "@scope/name" here since rsplit_once found the *last*
-    // "node_modules/" and everything after it, slash and all.
-    Some(pkg_dir)
+    let segments = pkg_dir.split('/').count();
+    let valid = if pkg_dir.starts_with('@') { segments == 2 } else { segments == 1 };
+    valid.then_some(pkg_dir)
 }
 
 pub fn parse_node<F>(inventory: &crate::fs::FileInventory, resolver: F) -> Result<Vec<Package>>
@@ -93,5 +94,12 @@ mod tests {
             package_dir_for("app/node_modules/@babel/core/package.json"),
             Some("@babel/core")
         );
+    }
+
+    #[test]
+    fn nested_package_json_inside_a_package_is_not_a_package() {
+        assert_eq!(package_dir_for("app/node_modules/minipass/dist/esm/package.json"), None);
+        assert_eq!(package_dir_for("app/node_modules/@babel/core/lib/package.json"), None);
+        assert_eq!(package_dir_for("app/node_modules/a/node_modules/b/package.json"), Some("b"));
     }
 }

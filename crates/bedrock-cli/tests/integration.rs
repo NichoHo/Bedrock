@@ -55,6 +55,25 @@ fn sbom_reports_real_dpkg_and_python_packages() {
 }
 
 #[test]
+fn sbom_reads_distro_through_os_release_symlink() {
+    // Debian and Ubuntu ship /etc/os-release as a symlink to ../usr/lib/os-release.
+    let dir = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(dir.path());
+    let status =
+        b"Package: apt\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.8.3\n\n";
+    let os_release = b"ID=ubuntu\nVERSION_ID=\"24.04\"\n";
+    let layer = builder.layer_with_symlinks(
+        &[("var/lib/dpkg/status", status), ("usr/lib/os-release", os_release)],
+        &[("etc/os-release", "../usr/lib/os-release")],
+    );
+    builder.finish(&[layer]);
+
+    Command::cargo_bin("bedrock").unwrap().arg("sbom").arg(dir.path()).assert().success().stdout(
+        predicate::str::contains("pkg:deb/ubuntu/apt@2.8.3?arch=amd64&distro=ubuntu-24.04"),
+    );
+}
+
+#[test]
 fn sbom_reports_real_node_package_version() {
     let dir = tempfile::tempdir().unwrap();
     let builder = LayoutBuilder::new(dir.path());

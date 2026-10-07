@@ -2,16 +2,21 @@ use crate::sbom::{Package, SbomError};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-/// Reads `/etc/os-release` from the image, if present, to get the distro id
+/// Reads os-release from the image, if present, to get the distro id
 /// (e.g. "debian", "ubuntu") and version for the PURL, instead of hardcoding
-/// "debian" for every dpkg-based image.
+/// "debian" for every dpkg-based image. On Debian and Ubuntu `/etc/os-release`
+/// is a symlink to `../usr/lib/os-release`, and a symlink's tar entry has no
+/// content, so fall back to `/usr/lib/os-release` per os-release(5).
 fn detect_distro<F>(inventory: &crate::fs::FileInventory, resolver: &F) -> (String, Option<String>)
 where
     F: Fn(&str) -> Option<PathBuf>,
 {
     let default = ("debian".to_string(), None);
-    let os_release_path = Path::new("etc/os-release");
-    let Some(meta) = inventory.files.get(os_release_path) else {
+    let Some((os_release_path, meta)) =
+        ["etc/os-release", "usr/lib/os-release"].iter().map(Path::new).find_map(|p| {
+            inventory.files.get(p).filter(|m| m.kind == crate::fs::EntryKind::File).map(|m| (p, m))
+        })
+    else {
         return default;
     };
     let Some(tar_path) = resolver(&meta.layer_digest) else {

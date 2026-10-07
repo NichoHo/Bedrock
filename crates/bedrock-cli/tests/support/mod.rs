@@ -20,6 +20,11 @@ impl LayoutBuilder {
     /// Writes one gzip-compressed tar layer from (path, content) entries and
     /// returns its digest (without the `sha256:` prefix).
     pub fn layer(&self, entries: &[(&str, &[u8])]) -> String {
+        self.layer_with_symlinks(entries, &[])
+    }
+
+    /// Like [`layer`](Self::layer), plus (link path, target) symlink entries.
+    pub fn layer_with_symlinks(&self, entries: &[(&str, &[u8])], links: &[(&str, &str)]) -> String {
         let mut buf = Vec::new();
         {
             let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
@@ -31,6 +36,13 @@ impl LayoutBuilder {
                 header.set_mode(0o644);
                 header.set_cksum();
                 builder.append(&header, *data).unwrap();
+            }
+            for (name, target) in links {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_size(0);
+                header.set_mode(0o777);
+                builder.append_link(&mut header, name, target).unwrap();
             }
             builder.into_inner().unwrap().finish().unwrap();
         }

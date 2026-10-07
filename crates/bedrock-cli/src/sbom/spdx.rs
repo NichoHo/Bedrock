@@ -6,9 +6,12 @@ pub fn write_spdx(sbom: &Sbom) -> String {
     let mut relationships = Vec::new();
     let mut describes = Vec::new();
 
-    for pkg in &sbom.packages {
+    for (i, pkg) in sbom.packages.iter().enumerate() {
+        // The index keeps IDs unique: names alone collide (two versions of one
+        // npm package, or names that differ only in punctuation).
         let spdx_id = format!(
-            "SPDXRef-Package-{}",
+            "SPDXRef-Package-{}-{}",
+            i,
             pkg.name.replace(|c: char| !c.is_ascii_alphanumeric(), "-")
         );
 
@@ -61,4 +64,30 @@ pub fn write_spdx(sbom: &Sbom) -> String {
     });
 
     serde_json::to_string_pretty(&doc).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sbom::Package;
+
+    #[test]
+    fn same_name_packages_get_distinct_spdx_ids() {
+        let pkg = |v: &str| Package {
+            name: "lru-cache".into(),
+            version: v.into(),
+            architecture: None,
+            purl: format!("pkg:npm/lru-cache@{v}"),
+            files: Vec::new(),
+        };
+        let out = write_spdx(&Sbom { packages: vec![pkg("7.0.0"), pkg("10.0.0")] });
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let ids: Vec<&str> = doc["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["SPDXID"].as_str().unwrap())
+            .collect();
+        assert_ne!(ids[0], ids[1]);
+    }
 }
