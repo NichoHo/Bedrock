@@ -1,4 +1,4 @@
-use crate::oci::manifest::resolve_manifest;
+use crate::oci::manifest::{resolve_manifest, verify_digest};
 use crate::oci::{Manifest, OciError};
 use anyhow::{Context, Result};
 use std::fs;
@@ -32,7 +32,10 @@ impl OciLayout {
 
     fn read_blob(&self, digest: &str) -> Result<Vec<u8>> {
         let path = self.get_blob_path(digest)?;
-        fs::read(&path).map_err(|e| OciError::Io(e).into())
+        let data = fs::read(&path).map_err(OciError::Io)?;
+        verify_digest(&data, digest)
+            .with_context(|| format!("blob {digest} failed verification"))?;
+        Ok(data)
     }
 
     /// Reads `index.json` and resolves it (following one level of nested index,

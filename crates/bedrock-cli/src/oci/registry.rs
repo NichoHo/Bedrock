@@ -1,4 +1,4 @@
-use crate::oci::manifest::resolve_manifest;
+use crate::oci::manifest::{resolve_manifest, verify_digest};
 use crate::oci::{Manifest, OciError};
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
@@ -99,7 +99,14 @@ impl RegistryClient {
             let body = resp.text().unwrap_or_default();
             anyhow::bail!("registry returned {status} fetching manifest {tag_or_digest}: {body}");
         }
-        Ok(resp.bytes().context("failed to read manifest response body")?.to_vec())
+        let bytes = resp.bytes().context("failed to read manifest response body")?.to_vec();
+        // A tag is mutable, so there's nothing to check it against; a digest
+        // (user-pinned, or an index entry) must match what came back.
+        if tag_or_digest.contains(':') {
+            verify_digest(&bytes, tag_or_digest)
+                .with_context(|| format!("manifest {tag_or_digest} failed verification"))?;
+        }
+        Ok(bytes)
     }
 
     /// Fetches the manifest for `tag_or_digest` and resolves it (following an
