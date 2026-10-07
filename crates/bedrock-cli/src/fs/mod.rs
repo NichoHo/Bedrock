@@ -14,12 +14,49 @@ pub enum EntryKind {
     Other,
 }
 
+/// Content hashes of a regular file (or a hard link to one). SHA-256 is the
+/// inventory's content digest; SHA-1 is carried because SPDX 2.3 requires it
+/// on every file element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Digests {
+    pub sha1: [u8; 20],
+    pub sha256: [u8; 32],
+}
+
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
     pub layer_digest: String,
     pub size: u64,
     pub mode: u32,
     pub kind: EntryKind,
+    /// `None` for directories, symlinks, and special files.
+    pub digests: Option<Digests>,
+}
+
+/// Hashes everything written to it with both algorithms in one pass.
+#[derive(Default)]
+struct DigestWriter {
+    sha1: sha1::Sha1,
+    sha256: sha2::Sha256,
+}
+
+impl std::io::Write for DigestWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use sha2::Digest;
+        self.sha1.update(buf);
+        self.sha256.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl DigestWriter {
+    fn finish(self) -> Digests {
+        use sha2::Digest;
+        Digests { sha1: self.sha1.finalize().into(), sha256: self.sha256.finalize().into() }
+    }
 }
 
 /// Caps on how much uncompressed data the inventory will walk, to stop
@@ -48,8 +85,6 @@ pub struct FileInventory {
 pub enum FsError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Failed to extract file: {0}")]
-    ExtractFailed(String),
     #[error("Hostile tar entry: {0}")]
     HostileEntry(PathBuf),
     #[error("{0} exceeds the {1}-byte limit (raise it with --max-layer-size / --max-image-size)")]
@@ -78,9 +113,16 @@ fn reject_hostile_path(path: &Path) -> Result<()> {
 /// Strips a leading `./` (or repeated `./`) so `./var/lib/dpkg/status` and
 /// `var/lib/dpkg/status` land on the same inventory key. Callers must run
 /// [`reject_hostile_path`] first; this does not defend against `..` or
-/// absolute paths.
+/// absolute paths. Always joins with `/` (collecting components into a
+/// `PathBuf` would use `\` on Windows), so inventory keys are image paths
+/// that string-matching code like the npm and dpkg parsers can rely on.
 fn strip_leading_curdir(path: &Path) -> PathBuf {
-    path.components().skip_while(|c| *c == std::path::Component::CurDir).collect()
+    let parts: Vec<_> = path
+        .components()
+        .filter(|c| *c != std::path::Component::CurDir)
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect();
+    PathBuf::from(parts.join("/"))
 }
 
 /// Opens `tar_path` as a tar stream, transparently gunzipping if the file
@@ -109,7 +151,7 @@ impl FileInventory {
         let mut total_size: u64 = 0;
 
         for entry in archive.entries()? {
-            let entry = entry?;
+            let mut entry = entry?;
             let raw_path = entry.path()?;
             reject_hostile_path(&raw_path)?;
             let path = strip_leading_curdir(&raw_path);
@@ -160,6 +202,20 @@ impl FileInventory {
                 _ => EntryKind::Other,
             };
 
+            let digests = match &kind {
+                EntryKind::File => {
+                    let mut hasher = DigestWriter::default();
+                    std::io::copy(&mut entry, &mut hasher)?;
+                    Some(hasher.finish())
+                }
+                // A hard link's tar entry has no data; it shares its target's,
+                // which tar guarantees appeared earlier in this or a lower layer.
+                EntryKind::HardLink(target) => {
+                    self.files.get(&strip_leading_curdir(target)).and_then(|m| m.digests)
+                }
+                _ => None,
+            };
+
             // A non-directory replacing a directory from a lower layer hides
             // everything that was under it (OCI image spec, "Changesets").
             // Only checked on a real dir -> non-dir replacement, so normal
@@ -177,6 +233,7 @@ impl FileInventory {
                     size: entry.header().size().unwrap_or(0),
                     mode: entry.header().mode().unwrap_or(0),
                     kind,
+                    digests,
                 },
             );
         }
@@ -220,15 +277,6 @@ impl FileInventory {
             }
         }
         Ok(results)
-    }
-
-    /// Convenience wrapper over [`extract_files`](Self::extract_files) for a
-    /// single path.
-    pub fn extract_file(&self, target_path: &Path, layer_tar_path: &Path) -> Result<Vec<u8>> {
-        let mut results = self.extract_files(&[target_path], layer_tar_path)?;
-        results.remove(&strip_leading_curdir(target_path)).ok_or_else(|| {
-            FsError::ExtractFailed(format!("{} not found in archive", target_path.display()))
-        })
     }
 }
 
@@ -332,6 +380,19 @@ mod tests {
     }
 
     #[test]
+    fn regular_files_get_content_digests() {
+        let tar = write_tar_gz(&[("etc/foo", b"foo")]);
+        let mut inv = FileInventory::new();
+        inv.apply_layer(tar.path(), "sha256:layer1").unwrap();
+        let d = inv.files[Path::new("etc/foo")].digests.unwrap();
+        assert_eq!(
+            hex::encode(d.sha256),
+            "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+        );
+        assert_eq!(hex::encode(d.sha1), "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33");
+    }
+
+    #[test]
     fn per_image_limit_spans_layers() {
         let a = write_tar_gz(&[("a", &[0u8; 600])]);
         let b = write_tar_gz(&[("b", &[0u8; 600])]);
@@ -345,7 +406,7 @@ mod tests {
     fn extract_file_rejects_hostile_entry_even_when_target_is_benign() {
         let tar = write_tar_gz(&[("../escape", b"x"), ("etc/foo", b"y")]);
         let inv = FileInventory::new();
-        let err = inv.extract_file(Path::new("etc/foo"), tar.path()).unwrap_err();
+        let err = inv.extract_files(&[Path::new("etc/foo")], tar.path()).unwrap_err();
         assert!(matches!(err, FsError::HostileEntry(_)));
     }
 

@@ -1,27 +1,15 @@
-use crate::sbom::{Package, SbomError};
+use crate::sbom::{read_file, Package};
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn parse_apk<F>(inventory: &crate::fs::FileInventory, resolver: F) -> Result<Vec<Package>>
 where
     F: Fn(&str) -> Option<PathBuf>,
 {
-    let db_path = Path::new("lib/apk/db/installed");
-    let packages = Vec::new();
-
-    let db_meta = match inventory.files.get(db_path) {
-        Some(m) => m,
-        None => return Ok(packages), // No apk installed
-    };
-
-    let tar_path = resolver(&db_meta.layer_digest)
-        .ok_or_else(|| SbomError::Parse("Layer tarball not found".into()))?;
-
-    let db_data = inventory.extract_file(db_path, &tar_path)?;
-    let db_text = String::from_utf8_lossy(&db_data);
-
-    let packages = parse_status(&db_text);
-    Ok(packages)
+    match read_file(inventory, &resolver, "lib/apk/db/installed")? {
+        Some(db) => Ok(parse_status(&String::from_utf8_lossy(&db))),
+        None => Ok(Vec::new()), // No apk installed
+    }
 }
 
 pub fn parse_status(db_text: &str) -> Vec<Package> {

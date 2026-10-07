@@ -225,23 +225,22 @@ fn parse_all_packages(
     inventory: &FileInventory,
     resolver: impl Fn(&str) -> Option<PathBuf> + Copy,
 ) -> Vec<sbom::Package> {
+    type Parser<F> = fn(&FileInventory, F) -> Result<Vec<sbom::Package>>;
+    let parsers: [(&str, Parser<_>); 5] = [
+        ("dpkg database", sbom::dpkg::parse_dpkg),
+        ("apk database", sbom::apk::parse_apk),
+        ("rpm database", sbom::rpm::parse_rpm),
+        ("node_modules", sbom::node::parse_node),
+        ("Python packages", sbom::python::parse_python),
+    ];
     let mut packages = Vec::new();
-    packages.extend(sbom::dpkg::parse_dpkg(inventory, resolver).unwrap_or_else(|e| {
-        eprintln!("Warning: failed to parse dpkg database: {e}");
-        Vec::new()
-    }));
-    packages.extend(sbom::apk::parse_apk(inventory, resolver).unwrap_or_else(|e| {
-        eprintln!("Warning: failed to parse apk database: {e}");
-        Vec::new()
-    }));
-    packages.extend(sbom::node::parse_node(inventory, resolver).unwrap_or_else(|e| {
-        eprintln!("Warning: failed to parse node_modules: {e}");
-        Vec::new()
-    }));
-    packages.extend(sbom::python::parse_python(inventory, resolver).unwrap_or_else(|e| {
-        eprintln!("Warning: failed to parse Python dist-info: {e}");
-        Vec::new()
-    }));
+    for (what, parse) in parsers {
+        match parse(inventory, resolver) {
+            Ok(found) => packages.extend(found),
+            // {:#} prints the whole context chain on one line.
+            Err(e) => eprintln!("Warning: failed to parse {what}: {e:#}"),
+        }
+    }
     packages
 }
 
@@ -323,7 +322,7 @@ fn run() -> Result<()> {
                 p.exists().then_some(p)
             };
             let packages = parse_all_packages(&inventory, resolver);
-            let sbom = sbom::Sbom { packages };
+            let sbom = sbom::Sbom::new(packages, &inventory);
 
             match format {
                 SbomFormat::Spdx => println!("{}", sbom::spdx::write_spdx(&sbom)),

@@ -26,3 +26,9 @@ name = "apk_fuzzer"
 path = "fuzz_targets/apk_fuzzer.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "rpm_fuzzer"
+path = "fuzz_targets/rpm_fuzzer.rs"
+test = false
+doc = false

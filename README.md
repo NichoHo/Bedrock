@@ -12,7 +12,15 @@ for the full design and roadmap.
 Early development. Working today:
 
 - `bedrock inspect <image>` — layers, file/directory/symlink counts, size, setuid/setgid binaries
-- `bedrock sbom <image>` — SPDX or CycloneDX SBOM from dpkg, apk, npm (`node_modules`), and Python (`.dist-info`) packages
+- `bedrock sbom <image>` — SPDX 2.3 or CycloneDX 1.5 SBOM. It reads these package sources:
+  - dpkg, including the per-package `status.d` layout of distroless images
+  - apk
+  - rpm (SQLite, Berkeley DB, and NDB databases)
+  - npm (`node_modules`)
+  - Python (`.dist-info` and `.egg-info`)
+
+  Each package lists the files it owns in the image, with SHA-1 and SHA-256 checksums.
+  CI checks the output with the official SPDX and CycloneDX validators.
 - `bedrock db status` — reports on the cached vulnerability snapshot, if any
 
 `<image>` can be a registry reference (`alpine:3.19`, `ghcr.io/org/image@sha256:...`)

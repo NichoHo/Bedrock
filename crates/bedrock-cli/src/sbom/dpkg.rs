@@ -1,43 +1,7 @@
-use crate::sbom::{Package, SbomError};
+use crate::fs::FileInventory;
+use crate::sbom::{read_file, read_files, OsRelease, Package};
 use anyhow::Result;
-use std::path::{Path, PathBuf};
-
-/// Reads os-release from the image, if present, to get the distro id
-/// (e.g. "debian", "ubuntu") and version for the PURL, instead of hardcoding
-/// "debian" for every dpkg-based image. On Debian and Ubuntu `/etc/os-release`
-/// is a symlink to `../usr/lib/os-release`, and a symlink's tar entry has no
-/// content, so fall back to `/usr/lib/os-release` per os-release(5).
-fn detect_distro<F>(inventory: &crate::fs::FileInventory, resolver: &F) -> (String, Option<String>)
-where
-    F: Fn(&str) -> Option<PathBuf>,
-{
-    let default = ("debian".to_string(), None);
-    let Some((os_release_path, meta)) =
-        ["etc/os-release", "usr/lib/os-release"].iter().map(Path::new).find_map(|p| {
-            inventory.files.get(p).filter(|m| m.kind == crate::fs::EntryKind::File).map(|m| (p, m))
-        })
-    else {
-        return default;
-    };
-    let Some(tar_path) = resolver(&meta.layer_digest) else {
-        return default;
-    };
-    let Ok(data) = inventory.extract_file(os_release_path, &tar_path) else {
-        return default;
-    };
-    let text = String::from_utf8_lossy(&data);
-
-    let mut id = None;
-    let mut version_id = None;
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("ID=") {
-            id = Some(v.trim_matches('"').to_string());
-        } else if let Some(v) = line.strip_prefix("VERSION_ID=") {
-            version_id = Some(v.trim_matches('"').to_string());
-        }
-    }
-    (id.unwrap_or_else(|| default.0.clone()), version_id)
-}
+use std::path::PathBuf;
 
 /// Percent-encodes the handful of characters that show up in Debian version
 /// strings and are not legal unescaped in a PURL: currently just the epoch
@@ -47,66 +11,103 @@ fn purl_escape_version(version: &str) -> String {
     version.replace(':', "%3A")
 }
 
-pub fn parse_dpkg<F>(inventory: &crate::fs::FileInventory, resolver: F) -> Result<Vec<Package>>
+/// Distroless images have no `var/lib/dpkg/status`. Instead each package gets
+/// its own stanza file in `var/lib/dpkg/status.d/<name>` (with no `Status:`
+/// field, since everything there is installed) and its file list in
+/// `status.d/<name>.md5sums`.
+const STATUS_D: &str = "var/lib/dpkg/status.d/";
+
+pub fn parse_dpkg<F>(inventory: &FileInventory, resolver: F) -> Result<Vec<Package>>
 where
     F: Fn(&str) -> Option<PathBuf>,
 {
-    let status_path = Path::new("var/lib/dpkg/status");
+    let os = OsRelease::read(inventory, &resolver);
+    let distro_id = os.id.as_deref().unwrap_or("debian");
+    let distro_version = os.version_id.as_deref();
 
-    let status_meta = match inventory.files.get(status_path) {
-        Some(m) => m,
-        None => return Ok(Vec::new()), // No dpkg installed
-    };
-
-    let tar_path = resolver(&status_meta.layer_digest)
-        .ok_or_else(|| SbomError::Parse("Layer tarball not found".into()))?;
-
-    let status_data = inventory.extract_file(status_path, &tar_path)?;
-    let status_text = String::from_utf8_lossy(&status_data);
-
-    let (distro_id, distro_version) = detect_distro(inventory, &resolver);
-    let mut packages = parse_status(&status_text, &distro_id, distro_version.as_deref());
-
-    // Group each package's file list by the layer that owns its .list file,
-    // so every list living in the same layer is extracted in one archive pass
-    // instead of re-opening (and re-gunzipping) the layer once per package.
-    let mut lists_by_layer: std::collections::HashMap<String, Vec<(PathBuf, usize)>> =
-        std::collections::HashMap::new();
-
-    for (i, pkg) in packages.iter().enumerate() {
-        let name = &pkg.name;
-        let arch = pkg.architecture.as_deref().unwrap_or("amd64");
-
-        let list_path = PathBuf::from(format!("var/lib/dpkg/info/{}.list", name));
-        let list_path_arch = PathBuf::from(format!("var/lib/dpkg/info/{}:{}.list", name, arch));
-
-        if let Some(meta) = inventory.files.get(&list_path) {
-            lists_by_layer.entry(meta.layer_digest.clone()).or_default().push((list_path, i));
-        } else if let Some(meta) = inventory.files.get(&list_path_arch) {
-            lists_by_layer.entry(meta.layer_digest.clone()).or_default().push((list_path_arch, i));
-        }
+    let mut packages = Vec::new();
+    if let Some(status) = read_file(inventory, &resolver, "var/lib/dpkg/status")? {
+        packages = parse_status(&String::from_utf8_lossy(&status), distro_id, distro_version);
+        attach_file_lists(inventory, &resolver, &mut packages, |pkg| {
+            let arch = pkg.architecture.as_deref().unwrap_or("amd64");
+            vec![
+                format!("var/lib/dpkg/info/{}.list", pkg.name),
+                format!("var/lib/dpkg/info/{}:{arch}.list", pkg.name),
+            ]
+        })?;
     }
 
-    for (layer_digest, files) in lists_by_layer {
-        let Some(tar_path) = resolver(&layer_digest) else { continue };
-        let paths: Vec<&Path> = files.iter().map(|(p, _)| p.as_path()).collect();
-        let extracted = inventory
-            .extract_files(&paths, &tar_path)
-            .map_err(|e| SbomError::Parse(format!("failed to extract dpkg file lists: {e}")))?;
-        for (path, pkg_idx) in files {
-            if let Some(list_data) = extracted.get(&path) {
-                let list_text = String::from_utf8_lossy(list_data);
-                for f in list_text.lines() {
-                    if !f.trim().is_empty() {
-                        let clean_path = f.trim().strip_prefix('/').unwrap_or(f.trim());
-                        packages[pkg_idx].files.push(PathBuf::from(clean_path));
-                    }
-                }
+    let mut stanza_paths: Vec<PathBuf> = inventory
+        .files
+        .keys()
+        .filter(|p| {
+            p.to_str().and_then(|s| s.strip_prefix(STATUS_D)).is_some_and(|name| {
+                !name.is_empty() && !name.contains('/') && !name.ends_with(".md5sums")
+            })
+        })
+        .cloned()
+        .collect();
+    stanza_paths.sort();
+    if !stanza_paths.is_empty() {
+        let stanzas = read_files(inventory, &resolver, &stanza_paths)?;
+        let mut distroless = Vec::new();
+        for path in &stanza_paths {
+            if let Some(data) = stanzas.get(path) {
+                distroless.extend(parse_stanzas(
+                    &String::from_utf8_lossy(data),
+                    distro_id,
+                    distro_version,
+                    false,
+                ));
             }
         }
+        attach_file_lists(inventory, &resolver, &mut distroless, |pkg| {
+            vec![format!("{STATUS_D}{}.md5sums", pkg.name)]
+        })?;
+        packages.extend(distroless);
     }
 
     Ok(packages)
+}
+
+/// Fills each package's `files` from the first of `candidates(pkg)` that
+/// exists. Handles both `.list` files (one absolute path per line) and
+/// `.md5sums` files (`<md5>  <relative path>` per line).
+fn attach_file_lists<F>(
+    inventory: &FileInventory,
+    resolver: &F,
+    packages: &mut [Package],
+    candidates: impl Fn(&Package) -> Vec<String>,
+) -> Result<()>
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    let chosen: Vec<Option<PathBuf>> = packages
+        .iter()
+        .map(|pkg| {
+            candidates(pkg).into_iter().map(PathBuf::from).find(|p| inventory.files.contains_key(p))
+        })
+        .collect();
+    let wanted: Vec<PathBuf> = chosen.iter().flatten().cloned().collect();
+    let lists = read_files(inventory, resolver, &wanted)?;
+
+    for (pkg, list_path) in packages.iter_mut().zip(chosen) {
+        let Some(data) = list_path.and_then(|p| lists.get(&p)) else { continue };
+        for line in String::from_utf8_lossy(data).lines() {
+            let line = line.trim();
+            // md5sums lines are "<32 hex chars>  <path>"; .list lines are just a path.
+            let path = match line.split_once("  ") {
+                Some((hash, path)) if hash.len() == 32 => path,
+                _ => line,
+            };
+            let path = path.trim_start_matches('/');
+            // .list files include "/." for the root directory.
+            if !path.is_empty() && path != "." {
+                pkg.files.push(PathBuf::from(path));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn parse_status(
@@ -114,70 +115,63 @@ pub fn parse_status(
     distro_id: &str,
     distro_version: Option<&str>,
 ) -> Vec<Package> {
+    parse_stanzas(status_text, distro_id, distro_version, true)
+}
+
+/// Parses dpkg control stanzas. With `status_required`, only stanzas whose
+/// `Status:` state is "installed" count (the main status file also keeps
+/// removed packages' config-files records). Distroless `status.d` stanzas
+/// carry no `Status:` field at all and are all installed.
+fn parse_stanzas(
+    text: &str,
+    distro_id: &str,
+    distro_version: Option<&str>,
+    status_required: bool,
+) -> Vec<Package> {
     let mut packages = Vec::new();
-    let mut current_pkg: Option<String> = None;
-    let mut current_ver: Option<String> = None;
-    let mut current_arch: Option<String> = None;
-    let mut current_status: Option<String> = None;
-
-    let mut push_pkg = |name: String, ver: String, arch: String, status: String| {
-        // dpkg status lines are "Status: <want> <flag> <state>". Only "installed"
-        // in the state field means the package is actually present; "config-files",
-        // "half-installed", etc. must not be reported as installed.
-        let is_installed = status.split_whitespace().nth(2) == Some("installed");
-        if is_installed {
-            let mut purl = format!(
-                "pkg:deb/{}/{}@{}?arch={}",
-                distro_id,
-                name,
-                purl_escape_version(&ver),
-                arch
-            );
-            if let Some(v) = distro_version {
-                purl.push_str(&format!("&distro={}-{}", distro_id, v));
-            }
-            packages.push(Package {
-                name,
-                version: ver,
-                architecture: Some(arch),
-                purl,
-                files: Vec::new(),
-            });
-        }
-    };
-
-    for line in status_text.lines() {
-        if line.is_empty() {
-            if let (Some(name), Some(ver), Some(arch), Some(status)) =
-                (&current_pkg, &current_ver, &current_arch, &current_status)
+    // Chaining an empty line onto the input flushes the last stanza even when
+    // the file doesn't end with a blank line.
+    let [mut name, mut version, mut arch, mut status]: [Option<String>; 4] = Default::default();
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.trim().is_empty() {
+            // dpkg status lines are "Status: <want> <flag> <state>". Only
+            // "installed" in the state field means the package is present;
+            // "config-files", "half-installed", etc. must not be reported.
+            let installed = match status.take() {
+                Some(s) => s.split_whitespace().nth(2) == Some("installed"),
+                None => !status_required,
+            };
+            if let (Some(n), Some(v), Some(a), true) =
+                (name.take(), version.take(), arch.take(), installed)
             {
-                push_pkg(name.clone(), ver.clone(), arch.clone(), status.clone());
+                let purl = format!(
+                    "pkg:deb/{distro_id}/{n}@{}?arch={a}{}",
+                    purl_escape_version(&v),
+                    distro_version
+                        .map(|dv| format!("&distro={distro_id}-{dv}"))
+                        .unwrap_or_default()
+                );
+                packages.push(Package {
+                    name: n,
+                    version: v,
+                    architecture: Some(a),
+                    purl,
+                    files: Vec::new(),
+                });
             }
-            current_pkg = None;
-            current_ver = None;
-            current_arch = None;
-            current_status = None;
+            (name, version, arch) = (None, None, None);
             continue;
         }
-
-        if let Some(rest) = line.strip_prefix("Package: ") {
-            current_pkg = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("Version: ") {
-            current_ver = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("Architecture: ") {
-            current_arch = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("Status: ") {
-            current_status = Some(rest.trim().to_string());
+        let Some((key, value)) = line.split_once(':') else { continue };
+        let value = value.trim().to_string();
+        match key {
+            "Package" => name = Some(value),
+            "Version" => version = Some(value),
+            "Architecture" => arch = Some(value),
+            "Status" => status = Some(value),
+            _ => {}
         }
     }
-
-    // Handle last package if file doesn't end with a blank line
-    if let (Some(name), Some(ver), Some(arch), Some(status)) =
-        (&current_pkg, &current_ver, &current_arch, &current_status)
-    {
-        push_pkg(name.clone(), ver.clone(), arch.clone(), status.clone());
-    }
-
     packages
 }
 
@@ -261,5 +255,12 @@ Version: 1.0
             pkgs[0].purl,
             "pkg:deb/ubuntu/libattr1@1%3A2.5.1-4?arch=amd64&distro=ubuntu-22.04"
         );
+    }
+
+    #[test]
+    fn distroless_stanza_without_status_counts_as_installed() {
+        let stanza = "Package: libc6\nVersion: 2.36-9\nArchitecture: amd64\n";
+        assert_eq!(parse_stanzas(stanza, "debian", None, false).len(), 1);
+        assert!(parse_stanzas(stanza, "debian", None, true).is_empty());
     }
 }
