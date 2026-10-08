@@ -46,7 +46,10 @@ fail the gate). A missing or damaged snapshot exits 4.
 set of image files it reached (Linux only; see
 [docs/reachability-trace.md](docs/reachability-trace.md) for usage and limits).
 
-Everything else — `slim`, `attest`, `report` — parses
+`bedrock slim` traces, prunes, writes a new OCI image and verifies it still
+works under the same workload; see [docs/slim.md](docs/slim.md).
+
+Everything else — `attest`, `report` — parses
 its arguments (so `--help` shows the intended interface) but exits 4 with
 "not implemented yet". Reachability tracing, pruning, vulnerability matching,
 and signing don't exist yet; nothing in this tool fakes success on an

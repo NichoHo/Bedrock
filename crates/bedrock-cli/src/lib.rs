@@ -5,9 +5,11 @@
 pub use anyhow::Result;
 
 pub mod fs;
+pub mod image;
 pub mod oci;
 pub mod report;
 pub mod sbom;
+pub mod slim;
 pub mod trace;
 pub mod vuln;
 

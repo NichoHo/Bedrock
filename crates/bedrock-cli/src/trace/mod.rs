@@ -64,6 +64,9 @@ pub struct WorkloadInfo {
     /// Script exit code (`None` if no script, or killed by a signal).
     pub script_exit: Option<i32>,
     pub http: Vec<HttpResult>,
+    /// Set when the workload could not run or the entrypoint never became ready.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,7 +128,7 @@ pub fn run(_req: TraceRequest<'_>) -> anyhow::Result<ReachSet> {
 
 #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub fn run(req: TraceRequest<'_>) -> anyhow::Result<ReachSet> {
-    use anyhow::{bail, Context};
+    use anyhow::Context;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -229,15 +232,16 @@ pub fn run(req: TraceRequest<'_>) -> anyhow::Result<ReachSet> {
     if let Some(msg) = &outcome.spawn_error {
         return Err(TraceError::Sandbox(msg.trim().to_string()).into());
     }
-    if let Some(e) = driven.error {
-        bail!("workload failed: {e}");
-    }
-    if driven.ready == Some(false) {
-        bail!(
-            "the entrypoint was not ready within {}s (check --ready-port / --ready-log-pattern)",
-            req.ready_timeout.as_secs()
-        );
-    }
+    // A failed workload still yields a reach set: `slim`'s verify step needs
+    // the paths a pruned run could not find. Callers decide whether it is fatal.
+    let error = driven.error.map(|e| format!("workload failed: {e}")).or_else(|| {
+        (driven.ready == Some(false)).then(|| {
+            format!(
+                "the entrypoint was not ready within {}s (check --ready-port / --ready-log-pattern)",
+                req.ready_timeout.as_secs()
+            )
+        })
+    });
 
     let workload = WorkloadInfo {
         kind: req.workload.kind().into(),
@@ -249,6 +253,7 @@ pub fn run(req: TraceRequest<'_>) -> anyhow::Result<ReachSet> {
         timed_out: outcome.timed_out,
         script_exit: driven.script_exit,
         http: driven.http,
+        error,
     };
     Ok(assemble(
         req.image,
@@ -345,10 +350,16 @@ pub fn assemble(
     let mut reached_packages = 0;
     let mut partial = Vec::new();
     for pkg in packages {
-        let hit = pkg.files.iter().filter(|f| reached_rel.contains(*f)).count();
+        // Directories are shared by many packages; only content counts.
+        let owned: Vec<&PathBuf> = pkg
+            .files
+            .iter()
+            .filter(|f| inventory.files.get(*f).is_some_and(|m| m.kind != EntryKind::Directory))
+            .collect();
+        let hit = owned.iter().filter(|f| reached_rel.contains(**f)).count();
         if hit > 0 {
             reached_packages += 1;
-            if hit < pkg.files.len() {
+            if hit < owned.len() {
                 partial.push(pkg.name.clone());
             }
         }

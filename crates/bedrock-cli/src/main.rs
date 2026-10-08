@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use bedrock::fs::{self, FileInventory};
+use bedrock::fs;
+use bedrock::image::{build_inventory, parse_all_packages};
 use bedrock::oci::archive::DockerArchive;
 use bedrock::oci::{Cache, ImageReference, Manifest, OciLayout, RegistryClient};
 use bedrock::{escape_control, report, sbom, vuln};
@@ -76,19 +77,45 @@ enum Commands {
         #[arg(last = true)]
         cmd: Vec<String>,
     },
-    /// Prune and verify an image (not yet implemented — see BEDROCK_SPEC.md Phase 4)
+    /// Trace an image, remove what the workload never needed, and verify the result still works
     Slim {
         image: String,
+        #[command(flatten)]
+        workload: WorkloadArgs,
+        /// Where to write the pruned image (an OCI layout directory; must not exist or be empty)
+        #[arg(long, short)]
+        output: PathBuf,
+        /// TOML file naming paths (globs) and packages to always keep
         #[arg(long)]
-        workload: Option<String>,
-        #[arg(long)]
-        workload_http: Option<String>,
-        #[arg(long)]
-        workload_duration: Option<String>,
-        #[arg(long)]
-        keep_list: Option<String>,
+        keep_list: Option<PathBuf>,
+        /// Keep the original layers, reusing untouched ones, instead of one new layer
         #[arg(long)]
         preserve_layers: bool,
+        /// Prune whole packages (default) or individual files
+        #[arg(long, value_enum, default_value_t = SlimGranularity::Package)]
+        granularity: SlimGranularity,
+        /// Do not add the built-in list of files every image needs (loader, libc, CA certs, ...)
+        #[arg(long)]
+        no_mandatory: bool,
+        /// Prune even when the workload failed or the run hit its timeout
+        #[arg(long)]
+        allow_partial_trace: bool,
+        /// Skip the verification run (not recommended)
+        #[arg(long)]
+        no_verify: bool,
+        /// Write the JSON report to this file
+        #[arg(long)]
+        report: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = SlimFormat::Terminal)]
+        format: SlimFormat,
+        /// Target platform as os/arch (e.g. linux/arm64). Defaults to this machine's architecture
+        #[arg(long, default_value_t = default_platform())]
+        platform: String,
+        #[command(flatten)]
+        limits: LimitArgs,
+        /// Replace the image's Cmd (arguments after `--`)
+        #[arg(last = true)]
+        cmd: Vec<String>,
     },
     /// Sign and attest an image (not yet implemented — see BEDROCK_SPEC.md Phase 5)
     Attest {
@@ -166,6 +193,50 @@ struct WorkloadArgs {
     /// Stop the whole run after this long
     #[arg(long, default_value = "10m")]
     timeout: String,
+}
+
+/// Validates the workload flags (usage errors exit 3) and builds the workload.
+fn workload_from(
+    w: &WorkloadArgs,
+) -> Result<(bedrock::trace::workload::Workload, bedrock::trace::workload::Readiness)> {
+    use bedrock::trace::workload::{parse_duration, Readiness, Workload};
+    let usage = |msg: &str| -> ! {
+        eprintln!("Error: {msg}");
+        std::process::exit(3)
+    };
+    let chosen = [w.workload.is_some(), w.workload_http.is_some(), w.workload_duration.is_some()];
+    if chosen.iter().filter(|c| **c).count() != 1 {
+        usage("give exactly one of --workload, --workload-http, --workload-duration");
+    }
+    let workload = match (&w.workload, &w.workload_http, &w.workload_duration) {
+        (Some(p), _, _) => Workload::Script(p.clone()),
+        (_, Some(p), _) => Workload::Http(p.clone()),
+        (_, _, Some(d)) => Workload::Duration(parse_duration(d)?),
+        _ => unreachable!("checked above"),
+    };
+    if matches!(workload, Workload::Script(_))
+        && w.ready_port.is_none()
+        && w.ready_log_pattern.is_none()
+    {
+        usage("--workload needs --ready-port or --ready-log-pattern, so it knows when to start");
+    }
+    if matches!(workload, Workload::Http(_)) && w.ready_port.is_none() {
+        usage("--workload-http needs --ready-port, the port the requests are sent to");
+    }
+    let readiness = Readiness { port: w.ready_port, log_pattern: w.ready_log_pattern.clone() };
+    Ok((workload, readiness))
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SlimGranularity {
+    Package,
+    File,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum SlimFormat {
+    Terminal,
+    Json,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -341,50 +412,6 @@ fn check_platform(
         }
     }
     Ok(())
-}
-
-fn build_inventory(
-    manifest: &Manifest,
-    blob_path: &dyn Fn(&str) -> Result<PathBuf>,
-    limits: fs::SizeLimits,
-) -> Result<FileInventory> {
-    let mut inventory = FileInventory::with_limits(limits);
-    for layer in &manifest.layers {
-        let path = blob_path(&layer.digest)?;
-        inventory
-            .apply_layer(&path, &layer.digest)
-            .with_context(|| format!("failed to apply layer {}", layer.digest))?;
-    }
-    Ok(inventory)
-}
-
-/// Runs every SBOM parser we have over `inventory`, collecting whatever each
-/// one finds. A parser failing (a malformed dpkg status file, say) is
-/// reported on stderr and doesn't stop the others from running, but it is
-/// always reported — never silently dropped.
-fn parse_all_packages(
-    inventory: &FileInventory,
-    resolver: impl Fn(&str) -> Option<PathBuf> + Copy,
-) -> Vec<sbom::Package> {
-    type Parser<F> = fn(&FileInventory, F) -> Result<Vec<sbom::Package>>;
-    let parsers: [(&str, Parser<_>); 5] = [
-        ("dpkg database", sbom::dpkg::parse_dpkg),
-        ("apk database", sbom::apk::parse_apk),
-        ("rpm database", sbom::rpm::parse_rpm),
-        ("node_modules", sbom::node::parse_node),
-        ("Python packages", sbom::python::parse_python),
-    ];
-    let mut packages = Vec::new();
-    for (what, parse) in parsers {
-        match parse(inventory, resolver) {
-            Ok(found) => packages.extend(found),
-            // {:#} prints the whole context chain on one line.
-            Err(e) => {
-                eprintln!("Warning: failed to parse {what}: {}", escape_control(&format!("{e:#}")))
-            }
-        }
-    }
-    packages
 }
 
 fn main() {
@@ -580,31 +607,8 @@ fn run() -> Result<()> {
             }
         }
         Commands::Trace { image, workload: w, output, platform, limits, cmd } => {
-            use bedrock::trace::workload::{parse_duration, Readiness, Workload};
-            let usage = |msg: &str| -> ! {
-                eprintln!("Error: {msg}");
-                std::process::exit(3)
-            };
-            let chosen =
-                [w.workload.is_some(), w.workload_http.is_some(), w.workload_duration.is_some()];
-            if chosen.iter().filter(|c| **c).count() != 1 {
-                usage("give exactly one of --workload, --workload-http, --workload-duration");
-            }
-            let workload = match (&w.workload, &w.workload_http, &w.workload_duration) {
-                (Some(p), _, _) => Workload::Script(p.clone()),
-                (_, Some(p), _) => Workload::Http(p.clone()),
-                (_, _, Some(d)) => Workload::Duration(parse_duration(d)?),
-                _ => unreachable!("checked above"),
-            };
-            if matches!(workload, Workload::Script(_))
-                && w.ready_port.is_none()
-                && w.ready_log_pattern.is_none()
-            {
-                usage("--workload needs --ready-port or --ready-log-pattern, so it knows when to start");
-            }
-            if matches!(workload, Workload::Http(_)) && w.ready_port.is_none() {
-                usage("--workload-http needs --ready-port, the port the requests are sent to");
-            }
+            use bedrock::trace::workload::parse_duration;
+            let (workload, readiness) = workload_from(w)?;
 
             let (os, arch) = parse_platform(platform)?;
             let cache = Cache::new().context("failed to initialize cache")?;
@@ -636,13 +640,13 @@ fn run() -> Result<()> {
                 cmd_override: (!cmd.is_empty()).then(|| cmd.clone()),
                 packages: &packages,
                 workload,
-                readiness: Readiness {
-                    port: w.ready_port,
-                    log_pattern: w.ready_log_pattern.clone(),
-                },
+                readiness,
                 ready_timeout: parse_duration(&w.ready_timeout)?,
                 timeout: parse_duration(&w.timeout)?,
             })?;
+            if let Some(e) = &reach.workload.error {
+                anyhow::bail!("{e}");
+            }
             let json = serde_json::to_string_pretty(&reach)?;
             match output {
                 Some(path) => std::fs::write(
@@ -663,7 +667,95 @@ fn run() -> Result<()> {
                 c.partially_reached_packages.len()
             );
         }
-        Commands::Slim { .. } => not_implemented("slim")?,
+        Commands::Slim {
+            image,
+            workload: w,
+            output,
+            keep_list,
+            preserve_layers,
+            granularity,
+            no_mandatory,
+            allow_partial_trace,
+            no_verify,
+            report: report_path,
+            format,
+            platform,
+            limits,
+            cmd,
+        } => {
+            use bedrock::trace::workload::parse_duration;
+            let (workload, readiness) = workload_from(w)?;
+            let keep_list = match keep_list {
+                Some(p) => bedrock::slim::keep::KeepList::parse(
+                    &std::fs::read_to_string(p)
+                        .with_context(|| format!("failed to read {}", p.display()))?,
+                )?,
+                None => Default::default(),
+            };
+
+            let (os, arch) = parse_platform(platform)?;
+            let cache = Cache::new().context("failed to initialize cache")?;
+            let reference = ImageReference::parse(image)?;
+            let (manifest, blob_path) = resolve_image(&reference, &cache, &os, &arch)?;
+            let inventory = build_inventory(&manifest, &*blob_path, limits.limits())?;
+            let resolver = |digest: &str| -> Option<PathBuf> {
+                let p = blob_path(digest).ok()?;
+                p.exists().then_some(p)
+            };
+            let packages = parse_all_packages(&inventory, resolver);
+            let layers = manifest
+                .layers
+                .iter()
+                .map(|l| Ok((l.digest.clone(), blob_path(&l.digest)?)))
+                .collect::<Result<Vec<_>>>()?;
+            let config_json = std::fs::read(blob_path(&manifest.config.digest)?)
+                .context("failed to read the image config")?;
+            // The snapshot is optional here: without it slim still prunes, just without CVE numbers.
+            let db =
+                vuln::VulnerabilityDb::new().ok().filter(|d| d.manifest().ok().flatten().is_some());
+
+            let result = bedrock::slim::run(bedrock::slim::SlimRequest {
+                image: bedrock::trace::ImageRef {
+                    reference: image.clone(),
+                    digest: manifest.config.digest.clone(),
+                    platform: platform.clone(),
+                },
+                inventory: &inventory,
+                layers,
+                config_json,
+                cmd_override: (!cmd.is_empty()).then(|| cmd.clone()),
+                packages: &packages,
+                workload,
+                readiness,
+                ready_timeout: parse_duration(&w.ready_timeout)?,
+                timeout: parse_duration(&w.timeout)?,
+                keep_list,
+                granularity: match granularity {
+                    SlimGranularity::Package => bedrock::slim::keep::Granularity::Package,
+                    SlimGranularity::File => bedrock::slim::keep::Granularity::File,
+                },
+                preserve_layers: *preserve_layers,
+                mandatory: !no_mandatory,
+                allow_partial_trace: *allow_partial_trace,
+                verify: !no_verify,
+                output: output.clone(),
+                db: db.as_ref(),
+                limits: limits.limits(),
+            })?;
+
+            if let Some(path) = report_path {
+                std::fs::write(path, result.report.to_json())
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+            }
+            match format {
+                SlimFormat::Terminal => print!("{}", result.report.to_terminal()),
+                SlimFormat::Json => println!("{}", result.report.to_json()),
+            }
+            if !result.passed {
+                eprintln!("verification failed: nothing was written to {}", output.display());
+                std::process::exit(2);
+            }
+        }
         Commands::Attest { .. } => not_implemented("attest")?,
         Commands::Report { .. } => not_implemented("report")?,
     }

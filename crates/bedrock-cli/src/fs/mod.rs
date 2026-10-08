@@ -116,7 +116,7 @@ fn reject_hostile_path(path: &Path) -> Result<()> {
 /// absolute paths. Always joins with `/` (collecting components into a
 /// `PathBuf` would use `\` on Windows), so inventory keys are image paths
 /// that string-matching code like the npm and dpkg parsers can rely on.
-fn strip_leading_curdir(path: &Path) -> PathBuf {
+pub(crate) fn strip_leading_curdir(path: &Path) -> PathBuf {
     let parts: Vec<_> = path
         .components()
         .filter(|c| *c != std::path::Component::CurDir)
@@ -127,7 +127,7 @@ fn strip_leading_curdir(path: &Path) -> PathBuf {
 
 /// Opens `tar_path` as a tar stream, transparently gunzipping if the file
 /// starts with the gzip magic bytes.
-fn open_archive(tar_path: &Path) -> Result<Archive<Box<dyn Read>>> {
+pub(crate) fn open_archive(tar_path: &Path) -> Result<Archive<Box<dyn Read>>> {
     let mut probe = File::open(tar_path)?;
     let mut magic = [0u8; 2];
     let is_gz = probe.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b];

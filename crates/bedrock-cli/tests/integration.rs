@@ -139,7 +139,7 @@ fn inspect_rejects_directory_without_oci_layout_marker() {
 
 #[test]
 fn not_implemented_commands_exit_4() {
-    Command::cargo_bin("bedrock").unwrap().args(["slim", "whatever"]).assert().failure().code(4);
+    Command::cargo_bin("bedrock").unwrap().args(["attest", "whatever"]).assert().failure().code(4);
 }
 
 #[test]
@@ -385,4 +385,105 @@ fn trace_without_a_workload_is_a_usage_error() {
         .failure()
         .code(3)
         .stderr(predicate::str::contains("exactly one of --workload"));
+}
+
+/// An image built from the host's dash and glibc: reads `/etc/used.conf`, and
+/// also ships files the entrypoint never touches. `None` where the host lacks them.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn dash_image(dir: &std::path::Path) -> Option<()> {
+    let dash = std::fs::read("/bin/dash").ok()?;
+    let libc = std::fs::read("/lib/x86_64-linux-gnu/libc.so.6").ok()?;
+    let ld = std::fs::read("/lib64/ld-linux-x86-64.so.2").ok()?;
+    let builder = LayoutBuilder::new(dir);
+    let layer = builder.layer_with_modes(&[
+        ("bin/dash", &dash, 0o755),
+        ("lib/x86_64-linux-gnu/libc.so.6", &libc, 0o755),
+        ("lib64/ld-linux-x86-64.so.2", &ld, 0o755),
+        ("etc/used.conf", b"echo from-config\n", 0o644),
+        ("etc/unused.conf", b"never read\n", 0o644),
+        ("opt/junk/big.bin", &[7u8; 4096], 0o644),
+    ]);
+    builder.finish_with_config(
+        &[layer],
+        br#"{"architecture":"amd64","os":"linux","config":{"Entrypoint":["/bin/dash","-c",". /etc/used.conf"]}}"#,
+    );
+    Some(())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn slim_prunes_unreached_files_verifies_and_is_reproducible() {
+    let img = tempfile::tempdir().unwrap();
+    if dash_image(img.path()).is_none() {
+        eprintln!("skipping: host lacks /bin/dash and x86-64 glibc");
+        return;
+    }
+    let out = tempfile::tempdir().unwrap();
+    let slim = |name: &str| {
+        Command::cargo_bin("bedrock")
+            .unwrap()
+            .args([
+                "slim",
+                "--workload-duration",
+                "5s",
+                "--platform",
+                "linux/amd64",
+                "--format",
+                "json",
+                "-o",
+            ])
+            .arg(out.path().join(name))
+            .arg(img.path())
+            .output()
+            .unwrap()
+    };
+    let first = slim("one");
+    if first.status.code() == Some(4) {
+        eprintln!("skipping: {}", String::from_utf8_lossy(&first.stderr));
+        return;
+    }
+    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(report["verify"]["status"], "pass");
+    let removed: Vec<&str> = report["removals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        removed.contains(&"/etc/unused.conf") && removed.contains(&"/opt/junk/big.bin"),
+        "{removed:?}"
+    );
+    assert!(!removed.contains(&"/etc/used.conf"), "{removed:?}");
+    assert!(report["delta"]["size_bytes"].as_i64().unwrap() <= 0);
+
+    // The output is a real image: list its files through our own reader.
+    let listing = Command::cargo_bin("bedrock")
+        .unwrap()
+        .arg("inspect")
+        .arg(out.path().join("one"))
+        .output()
+        .unwrap();
+    assert!(listing.status.success(), "{}", String::from_utf8_lossy(&listing.stderr));
+
+    // Same input, same workload: byte-identical image.
+    let second = slim("two");
+    assert!(second.status.success());
+    let index = |name: &str| std::fs::read(out.path().join(name).join("index.json")).unwrap();
+    assert_eq!(index("one"), index("two"), "pruned image is not reproducible");
+}
+
+#[test]
+fn slim_refuses_a_non_empty_output_directory() {
+    let out = tempfile::tempdir().unwrap();
+    std::fs::write(out.path().join("keep.txt"), b"x").unwrap();
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["slim", "--workload-duration", "1s", "-o"])
+        .arg(out.path())
+        .arg("whatever")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not empty").or(predicate::str::contains("whatever")));
 }

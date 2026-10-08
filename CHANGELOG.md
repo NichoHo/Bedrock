@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `slim`: keep-set computation (package or file granularity, keep-list, mandatory list),
+  deterministic OCI image assembly, dpkg/apk database rewriting, verify gate, and a
+  report with removals, delta and CVEs removed.
 - `trace`: ptrace sandbox with script, HTTP and duration workloads, symlink-aware
   path resolution, static ELF/shebang closure, and package coverage figures.
 - `db update` / `db status`: OSV (PyPI, npm, Go, crates.io) plus the Debian, Alpine and
