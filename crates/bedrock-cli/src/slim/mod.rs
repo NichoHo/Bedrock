@@ -44,6 +44,7 @@ pub struct SlimRequest<'a> {
     pub output: PathBuf,
     pub db: Option<&'a VulnerabilityDb>,
     pub limits: SizeLimits,
+    pub build: crate::report::BuildInfo,
 }
 
 pub struct SlimResult {
@@ -270,6 +271,7 @@ pub fn run(req: SlimRequest<'_>) -> Result<SlimResult> {
         .map(|(n, r)| Retained { name: n.clone(), reason: (*r).into() })
         .collect();
     report.verify = Some(verify);
+    report.build = Some(req.build.clone());
 
     if passed {
         // Same directory as the staging area, so this is an atomic rename.

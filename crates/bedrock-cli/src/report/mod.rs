@@ -37,6 +37,25 @@ pub struct Report {
     pub retained_unreached: Vec<Retained>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<Verify>,
+    /// How `slim` was run; the source of the provenance attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildInfo>,
+}
+
+/// The resolved invocation of `slim`, enough to describe how the output was made.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildInfo {
+    pub command_line: Vec<String>,
+    /// `sha256:...` of the workload script or request file (none for a timed run).
+    pub workload_digest: Option<String>,
+    pub keep_list_digest: Option<String>,
+    pub granularity: String,
+    pub preserve_layers: bool,
+    pub mandatory: bool,
+    pub verify: bool,
+    pub allow_partial_trace: bool,
+    /// `sha256:...` of the Bedrock executable that ran.
+    pub bedrock_digest: Option<String>,
 }
 
 /// Output minus input. Negative numbers are reductions.
@@ -212,6 +231,7 @@ impl Report {
             removals: Vec::new(),
             retained_unreached: Vec::new(),
             verify: None,
+            build: None,
         }
     }
 

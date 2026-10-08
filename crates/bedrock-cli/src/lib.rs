@@ -4,6 +4,7 @@
 //! binary itself.
 pub use anyhow::Result;
 
+pub mod attest;
 pub mod fs;
 pub mod image;
 pub mod oci;

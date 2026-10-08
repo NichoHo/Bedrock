@@ -49,7 +49,11 @@ set of image files it reached (Linux only; see
 `bedrock slim` traces, prunes, writes a new OCI image and verifies it still
 works under the same workload; see [docs/slim.md](docs/slim.md).
 
-Everything else — `attest`, `report` — parses
+`bedrock attest` signs the pruned image and attaches SLSA provenance and an SBOM
+as OCI referrers that `cosign` verifies; see [docs/attest.md](docs/attest.md).
+Key-based only: keyless signing is not implemented.
+
+Everything else — `report` — parses
 its arguments (so `--help` shows the intended interface) but exits 4 with
 "not implemented yet". Reachability tracing, pruning, vulnerability matching,
 and signing don't exist yet; nothing in this tool fakes success on an

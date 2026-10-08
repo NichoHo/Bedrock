@@ -139,7 +139,12 @@ fn inspect_rejects_directory_without_oci_layout_marker() {
 
 #[test]
 fn not_implemented_commands_exit_4() {
-    Command::cargo_bin("bedrock").unwrap().args(["attest", "whatever"]).assert().failure().code(4);
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["report", "--format", "markdown"])
+        .assert()
+        .failure()
+        .code(4);
 }
 
 #[test]
@@ -486,4 +491,54 @@ fn slim_refuses_a_non_empty_output_directory() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("not empty").or(predicate::str::contains("whatever")));
+}
+
+#[test]
+fn attest_without_a_key_is_an_environment_error() {
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["attest", "whatever"])
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains("keyless signing is not implemented"));
+}
+
+#[test]
+fn attest_adds_a_signature_and_sbom_to_an_oci_layout() {
+    use p256::pkcs8::EncodePrivateKey;
+    let dir = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(dir.path());
+    let layer = builder.layer(&[("etc/os-release", b"ID=alpine\nVERSION_ID=3.20\n")]);
+    builder.finish_with_config(&[layer], br#"{"architecture":"amd64","os":"linux","config":{}}"#);
+    let secret = p256::SecretKey::from_slice(&[5u8; 32]).unwrap();
+    let pem = p256::ecdsa::SigningKey::from(secret).to_pkcs8_pem(Default::default()).unwrap();
+    let key = dir.path().join("test.key");
+    std::fs::write(&key, pem.as_bytes()).unwrap();
+
+    let out = Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["attest", "--platform", "linux/amd64", "--key"])
+        .arg(&key)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("https://sigstore.dev/cosign/sign/v1"), "{stdout}");
+    assert!(stdout.contains("https://spdx.dev/Document"), "{stdout}");
+    // No slim report, so no provenance; the user is told why.
+    assert!(!stdout.contains("slsa.dev"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no provenance"));
+
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("index.json")).unwrap()).unwrap();
+    assert_eq!(index["manifests"].as_array().unwrap().len(), 3);
+    // The image itself is still found, by platform, alongside the attached artifacts.
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["sbom", "--platform", "linux/amd64"])
+        .arg(dir.path())
+        .assert()
+        .success();
 }

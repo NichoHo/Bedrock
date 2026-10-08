@@ -37,7 +37,12 @@ enum ManifestOrIndex {
 }
 
 fn parse_manifest_or_index(data: &[u8]) -> Result<ManifestOrIndex> {
-    let value: serde_json::Value = serde_json::from_slice(data)?;
+    let mut value: serde_json::Value = serde_json::from_slice(data)?;
+    // Signatures, SBOMs and attestations attached to an image are listed in the
+    // same index but are not images, whatever platform is asked for.
+    if let Some(entries) = value.get_mut("manifests").and_then(|m| m.as_array_mut()) {
+        entries.retain(|m| m.get("artifactType").is_none());
+    }
     if value.get("manifests").is_some() && value.get("config").is_none() {
         #[derive(Deserialize)]
         struct Index {
@@ -128,6 +133,17 @@ pub fn resolve_manifest(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attached_artifacts_in_an_index_are_not_images() {
+        let idx = br#"{"schemaVersion":2,"manifests":[
+          {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:aa","size":1},
+          {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:bb","size":1,"artifactType":"application/vnd.dev.sigstore.bundle.v0.3+json"}]}"#;
+        match super::parse_manifest_or_index(idx).unwrap() {
+            super::ManifestOrIndex::Index(entries) => assert_eq!(entries.len(), 1),
+            _ => panic!("expected an index"),
+        }
+    }
+
     use super::*;
 
     fn index(platforms: &[Option<(&str, &str)>]) -> Vec<u8> {

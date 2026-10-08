@@ -54,8 +54,22 @@ struct TokenResponse {
     access_token: Option<String>,
 }
 
+/// `http` for a loopback registry (local testing), `https` for everything else.
+fn scheme_for(registry: &str) -> &'static str {
+    let host = registry
+        .rsplit_once(':')
+        .filter(|(_, p)| p.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(registry, |(h, _)| h);
+    if matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+        "http"
+    } else {
+        "https"
+    }
+}
+
 pub struct RegistryClient {
     client: Client,
+    scheme: &'static str,
     registry: String,
     repository: String,
     /// Full `Authorization` header value once authenticated.
@@ -72,6 +86,7 @@ impl RegistryClient {
                 .connect_timeout(Duration::from_secs(30))
                 .build()
                 .expect("static client config is valid"),
+            scheme: scheme_for(registry),
             registry: registry.to_string(),
             repository: repository.to_string(),
             authorization: None,
@@ -79,7 +94,16 @@ impl RegistryClient {
     }
 
     pub fn authenticate(&mut self) -> Result<()> {
-        let ping_url = format!("https://{}/v2/", self.registry);
+        self.authenticate_for("pull")
+    }
+
+    /// Like [`authenticate`](Self::authenticate), with permission to write.
+    pub fn authenticate_push(&mut self) -> Result<()> {
+        self.authenticate_for("pull,push")
+    }
+
+    fn authenticate_for(&mut self, actions: &str) -> Result<()> {
+        let ping_url = format!("{}://{}/v2/", self.scheme, self.registry);
         let resp =
             send_with_retry(|| self.client.get(&ping_url)).context("registry ping failed")?;
 
@@ -128,7 +152,7 @@ impl RegistryClient {
             anyhow::bail!("refusing to send credentials to non-HTTPS token endpoint {realm}");
         }
 
-        let mut auth_url = format!("{}?scope=repository:{}:pull", realm, self.repository);
+        let mut auth_url = format!("{}?scope=repository:{}:{}", realm, self.repository, actions);
         if !service.is_empty() {
             auth_url.push_str(&format!("&service={}", service));
         }
@@ -168,8 +192,10 @@ impl RegistryClient {
     }
 
     fn fetch_manifest_bytes(&self, tag_or_digest: &str) -> Result<Vec<u8>> {
-        let url =
-            format!("https://{}/v2/{}/manifests/{}", self.registry, self.repository, tag_or_digest);
+        let url = format!(
+            "{}://{}/v2/{}/manifests/{}",
+            self.scheme, self.registry, self.repository, tag_or_digest
+        );
         let resp = send_with_retry(|| self.get(&url).header("Accept", MANIFEST_ACCEPT))
             .context("manifest request failed")?;
         let status = resp.status();
@@ -199,7 +225,8 @@ impl RegistryClient {
     }
 
     pub fn fetch_blob(&self, digest: &str, dest_path: &std::path::Path) -> Result<()> {
-        let url = format!("https://{}/v2/{}/blobs/{}", self.registry, self.repository, digest);
+        let url =
+            format!("{}://{}/v2/{}/blobs/{}", self.scheme, self.registry, self.repository, digest);
         let mut resp = send_with_retry(|| self.get(&url)).context("blob request failed")?;
         let status = resp.status();
         if !status.is_success() {
@@ -251,6 +278,107 @@ impl RegistryClient {
     }
 }
 
+impl RegistryClient {
+    fn authed(&self, req: RequestBuilder) -> RequestBuilder {
+        match &self.authorization {
+            Some(a) => req.header(AUTHORIZATION, a),
+            None => req,
+        }
+    }
+
+    fn repo_url(&self, tail: &str) -> String {
+        format!("{}://{}/v2/{}/{}", self.scheme, self.registry, self.repository, tail)
+    }
+
+    pub fn blob_exists(&self, digest: &str) -> Result<bool> {
+        let url = self.repo_url(&format!("blobs/{digest}"));
+        let resp =
+            send_with_retry(|| self.authed(self.client.head(&url))).context("blob check failed")?;
+        Ok(resp.status().is_success())
+    }
+
+    /// Uploads a blob (monolithic upload) unless the registry already has it.
+    pub fn push_blob(&self, digest: &str, data: &[u8]) -> Result<()> {
+        if self.blob_exists(digest)? {
+            return Ok(());
+        }
+        let start_url = self.repo_url("blobs/uploads/");
+        let start = send_with_retry(|| self.authed(self.client.post(&start_url)))
+            .context("blob upload could not start")?;
+        if start.status() != StatusCode::ACCEPTED {
+            anyhow::bail!(
+                "registry returned {} starting a blob upload (is the token allowed to push?)",
+                start.status()
+            );
+        }
+        let location = start
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .context("upload response had no Location")?
+            .to_string();
+        let location = if location.starts_with('/') {
+            format!("{}://{}{}", self.scheme, self.registry, location)
+        } else {
+            location
+        };
+        let url =
+            format!("{location}{}digest={digest}", if location.contains('?') { '&' } else { '?' });
+        let put = send_with_retry(|| {
+            self.authed(
+                self.client
+                    .put(&url)
+                    .header("Content-Type", "application/octet-stream")
+                    .body(data.to_vec()),
+            )
+        })
+        .context("blob upload failed")?;
+        if !put.status().is_success() {
+            anyhow::bail!("registry returned {} uploading blob {digest}", put.status());
+        }
+        Ok(())
+    }
+
+    /// Pushes a manifest under `reference` (tag or digest). Returns whether the
+    /// registry indexed its `subject` itself (the `OCI-Subject` response header).
+    pub fn push_manifest(&self, reference: &str, media_type: &str, data: &[u8]) -> Result<bool> {
+        let url = self.repo_url(&format!("manifests/{reference}"));
+        let resp = send_with_retry(|| {
+            self.authed(
+                self.client.put(&url).header("Content-Type", media_type).body(data.to_vec()),
+            )
+        })
+        .context("manifest upload failed")?;
+        if !resp.status().is_success() {
+            let body = resp.text().unwrap_or_default();
+            anyhow::bail!("registry rejected manifest {reference}: {body}");
+        }
+        Ok(resp.headers().contains_key("OCI-Subject"))
+    }
+
+    /// A manifest's raw bytes and media type, or `None` if it does not exist.
+    pub fn manifest_raw(&self, reference: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let url = self.repo_url(&format!("manifests/{reference}"));
+        let resp = send_with_retry(|| {
+            self.authed(self.client.get(&url).header("Accept", MANIFEST_ACCEPT))
+        })
+        .context("manifest request failed")?;
+        match resp.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            s if s.is_success() => {
+                let mt = resp
+                    .headers()
+                    .get("Content-Type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                Ok(Some((resp.bytes()?.to_vec(), mt)))
+            }
+            s => anyhow::bail!("registry returned {s} fetching manifest {reference}"),
+        }
+    }
+}
+
 fn basic_header(c: &Credentials) -> String {
     use base64::Engine;
     let raw = format!("{}:{}", c.username, c.password);
@@ -260,6 +388,16 @@ fn basic_header(c: &Credentials) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_loopback_registries_use_plain_http() {
+        assert_eq!(scheme_for("localhost:5000"), "http");
+        assert_eq!(scheme_for("127.0.0.1:5055"), "http");
+        assert_eq!(scheme_for("localhost"), "http");
+        assert_eq!(scheme_for("registry-1.docker.io"), "https");
+        assert_eq!(scheme_for("ghcr.io"), "https");
+        assert_eq!(scheme_for("localhost.evil.com:443"), "https");
+    }
 
     #[test]
     fn backoff_honours_retry_after_and_is_capped() {

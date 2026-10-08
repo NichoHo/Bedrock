@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `attest`: key-based signing with cosign-compatible keys; SLSA provenance, SPDX SBOM and
+  report attestations as Sigstore-bundle OCI referrers; registry push support (plain HTTP
+  for loopback registries). Keyless signing is not implemented.
 - `slim`: keep-set computation (package or file granularity, keep-list, mandatory list),
   deterministic OCI image assembly, dpkg/apk database rewriting, verify gate, and a
   report with removals, delta and CVEs removed.

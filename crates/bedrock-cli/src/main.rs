@@ -117,12 +117,24 @@ enum Commands {
         #[arg(last = true)]
         cmd: Vec<String>,
     },
-    /// Sign and attest an image (not yet implemented — see BEDROCK_SPEC.md Phase 5)
+    /// Sign an image and attach SLSA provenance, an SBOM and optionally the report as OCI referrers
     Attest {
+        /// The pruned image: an OCI layout directory (artifacts are added to it) or a registry reference
         image: String,
-        /// Key-based signing; omit for keyless (OIDC) signing, the CI default
+        /// Private key: a `cosign generate-key-pair` key (password in COSIGN_PASSWORD) or an ECDSA P-256 PEM key
         #[arg(long)]
-        key: Option<String>,
+        key: Option<PathBuf>,
+        /// The `slim --report` JSON; without it no provenance attestation is attached
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Also attach the report itself as an attestation
+        #[arg(long)]
+        attest_report: bool,
+        /// Target platform as os/arch (e.g. linux/arm64). Defaults to this machine's architecture
+        #[arg(long, default_value_t = default_platform())]
+        platform: String,
+        #[command(flatten)]
+        limits: LimitArgs,
     },
     /// Render a saved prune report (not yet implemented — see BEDROCK_SPEC.md Phase 6)
     Report {
@@ -193,6 +205,14 @@ struct WorkloadArgs {
     /// Stop the whole run after this long
     #[arg(long, default_value = "10m")]
     timeout: String,
+}
+
+/// `sha256:<hex>` of a file, or `None` if it cannot be read.
+fn file_digest(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(path).ok()?, &mut hasher).ok()?;
+    Some(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 /// Validates the workload flags (usage errors exit 3) and builds the workload.
@@ -685,6 +705,7 @@ fn run() -> Result<()> {
         } => {
             use bedrock::trace::workload::parse_duration;
             let (workload, readiness) = workload_from(w)?;
+            let keep_list_path = keep_list.clone();
             let keep_list = match keep_list {
                 Some(p) => bedrock::slim::keep::KeepList::parse(
                     &std::fs::read_to_string(p)
@@ -741,6 +762,25 @@ fn run() -> Result<()> {
                 output: output.clone(),
                 db: db.as_ref(),
                 limits: limits.limits(),
+                build: bedrock::report::BuildInfo {
+                    command_line: std::env::args().collect(),
+                    workload_digest: w
+                        .workload
+                        .as_ref()
+                        .or(w.workload_http.as_ref())
+                        .and_then(|p| file_digest(p)),
+                    keep_list_digest: keep_list_path.as_ref().and_then(|p| file_digest(p)),
+                    granularity: match granularity {
+                        SlimGranularity::Package => "package",
+                        SlimGranularity::File => "file",
+                    }
+                    .into(),
+                    preserve_layers: *preserve_layers,
+                    mandatory: !no_mandatory,
+                    verify: !no_verify,
+                    allow_partial_trace: *allow_partial_trace,
+                    bedrock_digest: std::env::current_exe().ok().and_then(|p| file_digest(&p)),
+                },
             })?;
 
             if let Some(path) = report_path {
@@ -756,7 +796,74 @@ fn run() -> Result<()> {
                 std::process::exit(2);
             }
         }
-        Commands::Attest { .. } => not_implemented("attest")?,
+        Commands::Attest { image, key, report: report_path, attest_report, platform, limits } => {
+            use bedrock::attest::{self, key::SigningKey, Target};
+            let key_path = key.as_ref().ok_or_else(|| {
+                EnvironmentError(
+                    "keyless signing is not implemented; pass --key (a cosign key pair or an ECDSA P-256 PEM key)"
+                        .into(),
+                )
+            })?;
+            let password = std::env::var("COSIGN_PASSWORD").unwrap_or_default();
+            let signing_key = SigningKey::load(key_path, &password)?;
+
+            let slim_report: Option<report::Report> = match report_path {
+                Some(p) => Some(
+                    serde_json::from_slice(
+                        &std::fs::read(p)
+                            .with_context(|| format!("failed to read {}", p.display()))?,
+                    )
+                    .with_context(|| format!("{} is not a Bedrock report", p.display()))?,
+                ),
+                None => None,
+            };
+
+            let (os, arch) = parse_platform(platform)?;
+            let cache = Cache::new().context("failed to initialize cache")?;
+            let reference = ImageReference::parse(image)?;
+            let (target, subject_name) = match &reference {
+                ImageReference::OciLayout(dir) => (Target::Layout(dir.clone()), None),
+                ImageReference::Registry { registry, repository, reference: tag } => {
+                    let mut client = RegistryClient::new(registry, repository);
+                    client.authenticate_push().context("registry authentication failed")?;
+                    (Target::Registry { client, reference: tag.clone() }, Some(image.clone()))
+                }
+                ImageReference::DockerArchive(_) => {
+                    anyhow::bail!(
+                        "cannot attach to a docker save archive; use an OCI layout or a registry"
+                    )
+                }
+            };
+
+            // The SBOM describes the image as it is, so read it back from the image itself.
+            let (manifest, blob_path) = resolve_image(&reference, &cache, &os, &arch)?;
+            let inventory = build_inventory(&manifest, &*blob_path, limits.limits())?;
+            let resolver = |digest: &str| -> Option<PathBuf> {
+                let p = blob_path(digest).ok()?;
+                p.exists().then_some(p)
+            };
+            let packages = parse_all_packages(&inventory, resolver);
+            let spdx_doc = sbom::spdx::write_spdx(&sbom::Sbom::new(packages, &inventory));
+
+            let attached = attest::run(attest::AttestRequest {
+                key: &signing_key,
+                target,
+                subject_name,
+                os,
+                arch,
+                spdx: Some(
+                    serde_json::from_str(&spdx_doc).context("generated SBOM is not valid JSON")?,
+                ),
+                slim_report: slim_report.as_ref(),
+                attest_report: *attest_report,
+            })?;
+            if slim_report.as_ref().is_none_or(|r| r.build.is_none()) {
+                eprintln!("note: no slim report with build info was given, so no provenance attestation was attached");
+            }
+            for a in attached {
+                println!("{}  {}", a.digest, a.predicate_type);
+            }
+        }
         Commands::Report { .. } => not_implemented("report")?,
     }
 
