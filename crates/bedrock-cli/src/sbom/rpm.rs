@@ -139,7 +139,7 @@ impl<'a> Header<'a> {
         ensure!(ty == TYPE_INT32, "tag {tag} is not int32");
         let bytes = count.checked_mul(4).and_then(|n| self.data.get(off..off.checked_add(n)?));
         let bytes = bytes.context("int32 array out of bounds")?;
-        Ok(bytes.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect())
+        Ok(bytes.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).collect())
     }
 
     fn files(&self) -> Result<Vec<PathBuf>> {
