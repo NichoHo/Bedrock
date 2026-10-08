@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- A corpus of 18 public images with workloads (`corpus/`, `scripts/corpus.py`); all 18 verify
+  (`docs/corpus.md`). The weekly workflow runs it for real.
+- CI runs the suite as root so the ptrace tests execute instead of skipping.
 - `report`: re-render a saved report as Markdown, a self-contained HTML page, terminal text,
   JSON or SARIF.
 - `attest`: key-based signing with cosign-compatible keys; SLSA provenance, SPDX SBOM and
@@ -29,6 +32,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CONTRIBUTING.md`.
 
 ### Changed
+- Pruned layers use maximum gzip compression.
+- The snap is classic-confined: trace and slim need ptrace and a chroot.
 - `--platform` defaults to the host architecture (was `linux/amd64`).
 - An image whose config names a different platform than `--platform` is now
   refused, including images reached without a manifest index.

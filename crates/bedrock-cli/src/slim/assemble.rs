@@ -81,10 +81,11 @@ impl LayerWriter {
     fn new(blobs: &Path, n: usize) -> Result<Self> {
         let tmp = blobs.join(format!(".tmp-layer-{n}"));
         let file = std::fs::File::create(&tmp)?;
-        // No mtime and a fixed level keep the gzip stream reproducible.
+        // No mtime and a fixed level keep the gzip stream reproducible; the best level
+        // because the output is written once and pulled many times.
         let gz = flate2::GzBuilder::new()
             .mtime(0)
-            .write(HashWriter::new(file), flate2::Compression::new(6));
+            .write(HashWriter::new(file), flate2::Compression::best());
         let mut tar = tar::Builder::new(HashWriter::new(gz));
         tar.mode(tar::HeaderMode::Complete);
         Ok(Self { tar, tmp, entries: 0 })

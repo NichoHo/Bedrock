@@ -1,25 +1,58 @@
 name: Weekly Corpus Test
 
-# No `schedule` trigger yet: the corpus itself (BEDROCK_SPEC.md Phase 6) isn't
-# implemented, and a job that's guaranteed to fail on a schedule is noise, not
-# signal. Re-add `schedule: - cron: '0 0 * * 0'` once `Run Corpus` below does
-# something real.
+# Runs `bedrock slim` over every image in corpus/corpus.toml against a fresh
+# advisory snapshot and publishes the results table (BEDROCK_SPEC.md Phase 6).
+# slim needs ptrace, so it runs as root: GitHub's Ubuntu runners restrict
+# unprivileged user namespaces, and root skips them.
 on:
+  schedule:
+    - cron: '0 0 * * 0'
   workflow_dispatch:
+    inputs:
+      only:
+        description: 'Comma-separated corpus entry names (default: all)'
+        required: false
+
+env:
+  BEDROCK_DB_DIR: ${{ github.workspace }}/.bedrock-db
 
 jobs:
   test-corpus:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Build Bedrock
         run: cargo build --release
 
-      - name: Run Corpus
+      - name: Fetch the advisory snapshot
+        run: ./target/release/bedrock db update
+
+      - name: Run corpus
         run: |
-          echo "Status: Not yet implemented"
-          exit 4
+          only=""
+          if [ -n "${{ github.event.inputs.only }}" ]; then only="--only ${{ github.event.inputs.only }}"; fi
+          sudo -E env "PATH=$PATH" "HOME=$HOME" python3 scripts/corpus.py \
+            --bedrock target/release/bedrock --out corpus-out --min-pass 15 $only
+
+      - name: Publish results
+        if: always()
+        run: |
+          if [ -f corpus-out/results.md ]; then cat corpus-out/results.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corpus-results
+          path: |
+            corpus-out/results.json
+            corpus-out/results.md
+            corpus-out/*/report.json

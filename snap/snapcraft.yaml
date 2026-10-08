@@ -6,12 +6,16 @@ description: |
   Bedrock traces container workloads and removes unused files to create a distroless
   equivalent. It generates SBOMs, matches vulnerabilities, prunes, and signs the output.
 
-  Status: early development. `inspect`, `sbom`, and `db status` work; every other
-  command reports "not implemented" (exit 4). See the project's BEDROCK_SPEC.md.
+  Commands: inspect, sbom, db, scan, trace, slim, attest, report. Tracing and
+  slimming need Linux (ptrace and a chroot), which is why this snap is
+  classic-confined.
 
-# Not "stable": most of the CLI surface documented above isn't implemented yet.
+# Not "stable" until the corpus passes in CI on a release tag.
 grade: devel
-confinement: strict
+# Classic: trace and slim run an image's entrypoint under ptrace in a chroot
+# and mount namespace, which strict confinement blocks. The store reviews
+# classic requests manually.
+confinement: classic
 
 parts:
   bedrock:

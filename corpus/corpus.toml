@@ -1,0 +1,122 @@
+# The corpus: real public images, each with a workload that exercises it.
+# `scripts/corpus.py` runs `bedrock slim` on every entry and reports PASS when
+# the run exits 0 and the pruned image verifies (same exit status, same HTTP
+# status and body digests as the original).
+#
+# Workload kinds:
+#   http     = replay a .http file against ready_port
+#   duration = run for that long (a command that exits on its own ends sooner)
+#
+# `cmd` replaces the image's Cmd, as arguments after `--` do.
+
+[[image]]
+name = "python-http"
+image = "python:3.12-slim-bookworm"
+http = "workloads/root.http"
+ready_port = 8000
+cmd = ["python3", "-m", "http.server", "8000"]
+
+[[image]]
+name = "python-alpine-http"
+image = "python:3.12-alpine"
+http = "workloads/root.http"
+ready_port = 8000
+cmd = ["python3", "-m", "http.server", "8000"]
+
+[[image]]
+name = "python-imports"
+image = "python:3.12-slim-bookworm"
+duration = "20s"
+cmd = ["python3", "-c", "import ssl, json, sqlite3, hashlib; print(ssl.OPENSSL_VERSION, hashlib.sha256(b'x').hexdigest())"]
+
+[[image]]
+name = "node-alpine-http"
+image = "node:22-alpine"
+http = "workloads/root.http"
+ready_port = 3000
+cmd = ["node", "-e", "require('http').createServer((q,s)=>s.end('ok')).listen(3000)"]
+
+[[image]]
+name = "node-slim-http"
+image = "node:22-slim"
+http = "workloads/root.http"
+ready_port = 3000
+cmd = ["node", "-e", "require('http').createServer((q,s)=>s.end('ok')).listen(3000)"]
+
+[[image]]
+name = "nginx-alpine"
+image = "nginx:alpine"
+http = "workloads/root.http"
+ready_port = 80
+
+[[image]]
+name = "httpd-alpine"
+image = "httpd:alpine"
+http = "workloads/root.http"
+ready_port = 80
+
+[[image]]
+name = "caddy"
+image = "caddy:alpine"
+http = "workloads/root.http"
+ready_port = 80
+
+[[image]]
+name = "whoami-scratch"
+image = "traefik/whoami"
+# `/` echoes the client's ephemeral port, so its body differs run to run.
+http = "workloads/health.http"
+ready_port = 80
+
+[[image]]
+name = "busybox-httpd"
+image = "busybox:stable"
+http = "workloads/passwd.http"
+ready_port = 8080
+cmd = ["httpd", "-f", "-p", "8080", "-h", "/etc"]
+
+[[image]]
+name = "redis-alpine"
+image = "redis:7-alpine"
+duration = "4s"
+
+[[image]]
+name = "memcached-alpine"
+image = "memcached:alpine"
+duration = "4s"
+
+[[image]]
+name = "alpine-shell"
+image = "alpine:3.20"
+duration = "20s"
+cmd = ["sh", "-c", "cat /etc/os-release | head -2; ls /usr/bin | wc -l"]
+
+[[image]]
+name = "debian-shell"
+image = "debian:12-slim"
+duration = "20s"
+cmd = ["bash", "-c", "echo hi; ls /usr/bin | head -3; date -u +%Y > /dev/null"]
+
+[[image]]
+name = "ubuntu-dpkg"
+image = "ubuntu:24.04"
+duration = "20s"
+cmd = ["sh", "-c", "dpkg -l | head -3"]
+
+[[image]]
+name = "ruby-alpine"
+image = "ruby:3.3-alpine"
+duration = "20s"
+cmd = ["ruby", "-e", "require 'json'; puts JSON.generate(v: RUBY_VERSION)"]
+
+[[image]]
+name = "php-cli-alpine"
+image = "php:8-cli-alpine"
+duration = "20s"
+cmd = ["php", "-r", "echo json_encode(['v' => PHP_VERSION]);"]
+
+[[image]]
+name = "golang-version"
+image = "golang:1.23-alpine"
+duration = "30s"
+cmd = ["go", "version"]

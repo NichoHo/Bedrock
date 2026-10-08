@@ -26,6 +26,18 @@ jobs:
     - name: Run tests
       run: cargo test --workspace --all-targets --all-features
 
+  # trace and slim run the real ptrace sandbox. The `build` job's unprivileged
+  # runs skip those tests on Ubuntu runners (user namespaces are restricted
+  # there, which Bedrock reports as exit 4), so run the suite once as root,
+  # where the sandbox needs no user namespace and nothing is skipped.
+  linux-ptrace:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Test as root with ptrace
+      run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --workspace --all-targets
+
   # Licence and advisory checks on Bedrock's own dependencies (deny.toml).
   deny:
     runs-on: ubuntu-latest
