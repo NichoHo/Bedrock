@@ -57,13 +57,8 @@ jobs:
     needs: build-and-release
     steps:
       - uses: actions/checkout@v4
+      # Build only. Publishing waits for Phase 5 (BEDROCK_SPEC.md): until
+      # releases are signed, the store should not get an unsigned, devel-grade
+      # snap on every tag. Add snapcore/action-publish back with signing.
       - name: Build Snap
-        id: build
         uses: snapcore/action-build@v1
-      - name: Publish Snap
-        uses: snapcore/action-publish@v1
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.STORE_LOGIN }}
-        with:
-          snap: ${{ steps.build.outputs.snap }}
-          release: edge

@@ -39,7 +39,7 @@ proptest! {
     fn apk_db_round_trips(pkgs in packages()) {
         let text: String =
             pkgs.iter().map(|(n, v, a)| format!("P:{n}\nV:{v}\nA:{a}\nF:usr/bin\nR:{n}\n\n")).collect();
-        let parsed = apk::parse_status(&text);
+        let parsed = apk::parse_status(&text, "alpine", None);
         prop_assert_eq!(parsed.len(), pkgs.len());
         for (p, (n, v, _)) in parsed.iter().zip(&pkgs) {
             prop_assert_eq!(&p.name, n);
@@ -51,7 +51,7 @@ proptest! {
     #[test]
     fn text_parsers_never_panic(text in "(?s).{0,2000}") {
         let _ = dpkg::parse_status(&text, "debian", None);
-        let _ = apk::parse_status(&text);
+        let _ = apk::parse_status(&text, "alpine", None);
     }
 
     #[test]

@@ -49,6 +49,25 @@ impl LayoutBuilder {
         self.write_blob(&buf)
     }
 
+    /// A layer whose entries carry explicit file modes (e.g. setuid).
+    pub fn layer_with_modes(&self, entries: &[(&str, &[u8], u32)]) -> String {
+        let mut buf = Vec::new();
+        {
+            let encoder = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(encoder);
+            for (name, data, mode) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_path(name).unwrap();
+                header.set_size(data.len() as u64);
+                header.set_mode(*mode);
+                header.set_cksum();
+                builder.append(&header, *data).unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+        self.write_blob(&buf)
+    }
+
     fn write_blob(&self, data: &[u8]) -> String {
         let digest = hex::encode(Sha256::digest(data));
         fs::write(self.root.join("blobs/sha256").join(&digest), data).unwrap();
@@ -58,7 +77,11 @@ impl LayoutBuilder {
     /// Finalizes the layout: writes an empty config blob, a manifest
     /// referencing `layer_digests` in order, and `index.json` pointing at it.
     pub fn finish(&self, layer_digests: &[String]) {
-        let config = b"{}";
+        self.finish_with_config(layer_digests, b"{}");
+    }
+
+    /// Like [`finish`](Self::finish), with a chosen image config JSON.
+    pub fn finish_with_config(&self, layer_digests: &[String], config: &[u8]) {
         let config_digest = self.write_blob(config);
 
         let layers: Vec<_> = layer_digests

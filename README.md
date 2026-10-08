@@ -23,8 +23,11 @@ Early development. Working today:
   CI checks the output with the official SPDX and CycloneDX validators.
 - `bedrock db status` — reports on the cached vulnerability snapshot, if any
 
-`<image>` can be a registry reference (`alpine:3.19`, `ghcr.io/org/image@sha256:...`)
-or a local OCI image layout directory.
+`<image>` can be a registry reference (`alpine:3.19`, `ghcr.io/org/image@sha256:...`),
+a local OCI image layout directory, or a `docker save` archive (`image.tar`).
+Private registries work after `docker login`: Bedrock reads Docker's `config.json`
+and credential helpers on each run and stores nothing.
+`--platform` defaults to your machine's architecture (for example `linux/arm64` on Apple silicon).
 
 Everything else — `scan`, `trace`, `slim`, `attest`, `report`, `db update` — parses
 its arguments (so `--help` shows the intended interface) but exits 4 with
@@ -54,10 +57,11 @@ cargo run -- sbom alpine:3.19 --format spdx
 cargo fmt --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
+cargo deny check
 ```
 
-All three run in CI on every push and pull request (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+All four run in CI on every push and pull request (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ## License
 
-MIT, see [`LICENSE`](LICENSE). Security disclosure: see [`SECURITY.md`](SECURITY.md).
+MIT, see [`LICENSE`](LICENSE). Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md). Security disclosure: [`SECURITY.md`](SECURITY.md).

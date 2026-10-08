@@ -25,6 +25,28 @@ fn sbom_reports_real_apk_package_and_version() {
 }
 
 #[test]
+fn sbom_finds_apk_db_in_merged_usr_layout() {
+    // Wolfi and Chainguard make /lib a symlink to usr/lib, so the database's
+    // tar path is usr/lib/apk/db/installed.
+    let dir = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(dir.path());
+    let apk_db = b"P:glibc\nV:2.39-r5\nA:x86_64\n\n";
+    let layer = builder.layer_with_symlinks(
+        &[("usr/lib/apk/db/installed", apk_db), ("etc/os-release", b"ID=wolfi\n")],
+        &[("lib", "usr/lib")],
+    );
+    builder.finish(&[layer]);
+
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .arg("sbom")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pkg:apk/wolfi/glibc@2.39-r5"));
+}
+
+#[test]
 fn sbom_reports_real_dpkg_and_python_packages() {
     let dir = tempfile::tempdir().unwrap();
     let builder = LayoutBuilder::new(dir.path());
@@ -118,4 +140,76 @@ fn inspect_rejects_directory_without_oci_layout_marker() {
 #[test]
 fn not_implemented_commands_exit_4() {
     Command::cargo_bin("bedrock").unwrap().args(["scan", "whatever"]).assert().failure().code(4);
+}
+
+#[test]
+fn inspect_refuses_an_image_built_for_another_platform() {
+    let dir = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(dir.path());
+    let layer = builder.layer(&[("etc/foo", b"data")]);
+    builder.finish_with_config(&[layer], br#"{"os":"linux","architecture":"arm64"}"#);
+
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["inspect", "--platform", "linux/amd64"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("arm64"));
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["inspect", "--platform", "linux/arm64"])
+        .arg(dir.path())
+        .assert()
+        .success();
+}
+
+#[test]
+fn inspect_escapes_control_characters_in_setuid_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(dir.path());
+    let layer = builder.layer_with_modes(&[("bin/evil\x1b[2J", b"x", 0o4755)]);
+    builder.finish(&[layer]);
+
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .arg("inspect")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bin/evil\\u{1b}[2J"))
+        .stdout(predicate::str::contains('\x1b').not());
+}
+
+#[test]
+fn inspect_reads_a_docker_save_archive() {
+    fn tar_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut b = tar::Builder::new(Vec::new());
+        for (name, data) in entries {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append_data(&mut h, name, *data).unwrap();
+        }
+        b.into_inner().unwrap()
+    }
+    let layer = tar_of(&[("etc/foo", b"data"), ("etc/bar", b"more")]);
+    let manifest = br#"[{"Config":"cfg.json","RepoTags":["t:1"],"Layers":["l0/layer.tar"]}]"#;
+    let image = tar_of(&[
+        ("manifest.json", manifest),
+        ("cfg.json", br#"{"os":"linux","architecture":"amd64"}"#),
+        ("l0/layer.tar", &layer),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.tar");
+    std::fs::write(&path, image).unwrap();
+
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["inspect", "--platform", "linux/amd64"])
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Files: 2"));
 }

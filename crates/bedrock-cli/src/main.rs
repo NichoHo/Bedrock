@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use bedrock::fs::{self, FileInventory};
+use bedrock::oci::archive::DockerArchive;
 use bedrock::oci::{Cache, ImageReference, Manifest, OciLayout, RegistryClient};
 use bedrock::{sbom, vuln};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -19,8 +20,8 @@ enum Commands {
     Inspect {
         /// Image reference (e.g. ubuntu:latest), OCI layout directory, or .tar archive
         image: String,
-        /// Target platform as os/arch (e.g. linux/arm64)
-        #[arg(long, default_value = "linux/amd64")]
+        /// Target platform as os/arch (e.g. linux/arm64). Defaults to this machine's architecture
+        #[arg(long, default_value_t = default_platform())]
         platform: String,
         #[command(flatten)]
         limits: LimitArgs,
@@ -30,7 +31,8 @@ enum Commands {
         image: String,
         #[arg(long, value_enum, default_value_t = SbomFormat::Spdx)]
         format: SbomFormat,
-        #[arg(long, default_value = "linux/amd64")]
+        /// Target platform as os/arch (e.g. linux/arm64). Defaults to this machine's architecture
+        #[arg(long, default_value_t = default_platform())]
         platform: String,
         #[command(flatten)]
         limits: LimitArgs,
@@ -153,6 +155,30 @@ fn not_implemented<T>(what: &'static str) -> Result<T> {
 /// Resolves a blob digest to its local path on disk.
 type BlobPathFn = Box<dyn Fn(&str) -> Result<PathBuf>>;
 
+/// The host's architecture with the `linux` OS: container images are Linux
+/// images even when Bedrock runs on macOS or Windows. Architecture names are
+/// Go's (what registries use), not Rust's.
+fn default_platform() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "x86" => "386",
+        "powerpc64" if cfg!(target_endian = "little") => "ppc64le",
+        "powerpc64" => "ppc64",
+        other => other,
+    };
+    format!("linux/{arch}")
+}
+
+/// Makes text from inside an image safe to print: control characters (ESC,
+/// newlines, ...) become visible `\u{..}` escapes, so a crafted filename can't
+/// inject terminal escape sequences or forge output lines.
+fn escape_control(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| if c.is_control() { c.escape_default().collect() } else { vec![c] })
+        .collect()
+}
+
 fn parse_platform(platform: &str) -> Result<(String, String)> {
     let (os, arch) = platform
         .split_once('/')
@@ -173,7 +199,7 @@ fn resolve_image(
     os: &str,
     arch: &str,
 ) -> Result<(Manifest, BlobPathFn)> {
-    match reference {
+    let (manifest, blob_path): (Manifest, BlobPathFn) = match reference {
         ImageReference::Registry { registry, repository, reference } => {
             let mut client = RegistryClient::new(registry, repository);
             client.authenticate().context("registry authentication failed")?;
@@ -181,25 +207,70 @@ fn resolve_image(
                 .resolve_manifest(reference, os, arch)
                 .context("failed to resolve manifest")?;
 
-            for layer in &manifest.layers {
-                if !cache.blob_exists(&layer.digest) {
-                    let blob_path = cache.get_blob_path(&layer.digest)?;
+            for blob in std::iter::once(&manifest.config).chain(&manifest.layers) {
+                if !cache.blob_exists(&blob.digest) {
+                    let blob_path = cache.get_blob_path(&blob.digest)?;
                     client
-                        .fetch_blob(&layer.digest, &blob_path)
-                        .with_context(|| format!("failed to fetch blob {}", layer.digest))?;
+                        .fetch_blob(&blob.digest, &blob_path)
+                        .with_context(|| format!("failed to fetch blob {}", blob.digest))?;
                 }
             }
             let cache = cache.clone();
-            Ok((manifest, Box::new(move |digest: &str| cache.get_blob_path(digest))))
+            (manifest, Box::new(move |digest: &str| cache.get_blob_path(digest)))
         }
         ImageReference::OciLayout(path) => {
             let layout = OciLayout::new(path);
             let manifest =
                 layout.resolve_manifest(os, arch).context("failed to resolve manifest")?;
-            Ok((manifest, Box::new(move |digest: &str| layout.get_blob_path(digest))))
+            (manifest, Box::new(move |digest: &str| layout.get_blob_path(digest)))
         }
-        ImageReference::DockerArchive(_) => not_implemented("Docker save-format archives"),
+        ImageReference::DockerArchive(path) => {
+            let (manifest, archive) = DockerArchive::open(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            // `archive` moves into the closure: dropping it deletes the unpacked layers.
+            (manifest, Box::new(move |digest: &str| archive.blob_path(digest)))
+        }
+    };
+    check_platform(&manifest, &*blob_path, os, arch)?;
+    Ok((manifest, blob_path))
+}
+
+/// Config fields that say what platform an image was built for.
+#[derive(serde::Deserialize)]
+struct ImageConfigPlatform {
+    os: Option<String>,
+    architecture: Option<String>,
+}
+
+/// Rejects an image whose config says it is for a different platform than
+/// requested. An index lookup already guarantees this, but a reference that
+/// points straight at a single-platform manifest (or a layout or archive
+/// holding one) gets no such check, and would otherwise be analysed as the
+/// wrong architecture without a word. A config that doesn't say is accepted.
+fn check_platform(
+    manifest: &Manifest,
+    blob_path: &dyn Fn(&str) -> Result<PathBuf>,
+    os: &str,
+    arch: &str,
+) -> Result<()> {
+    use std::io::Read;
+    let path = blob_path(&manifest.config.digest)?;
+    let mut data = Vec::new();
+    // A config is a few KB; the cap stops a hostile one being buffered whole.
+    std::fs::File::open(&path)
+        .and_then(|f| f.take(16 << 20).read_to_end(&mut data))
+        .with_context(|| format!("failed to read image config {}", path.display()))?;
+    let cfg: ImageConfigPlatform =
+        serde_json::from_slice(&data).context("image config is not valid JSON")?;
+    for (what, want, got) in [("os", os, &cfg.os), ("architecture", arch, &cfg.architecture)] {
+        if let Some(got) = got.as_deref().filter(|g| *g != want) {
+            anyhow::bail!(
+                "image is built for {what} {:?}, but {what} {want:?} was requested (see --platform)",
+                escape_control(got)
+            );
+        }
     }
+    Ok(())
 }
 
 fn build_inventory(
@@ -238,7 +309,9 @@ fn parse_all_packages(
         match parse(inventory, resolver) {
             Ok(found) => packages.extend(found),
             // {:#} prints the whole context chain on one line.
-            Err(e) => eprintln!("Warning: failed to parse {what}: {e:#}"),
+            Err(e) => {
+                eprintln!("Warning: failed to parse {what}: {}", escape_control(&format!("{e:#}")))
+            }
         }
     }
     packages
@@ -250,7 +323,8 @@ fn main() {
             eprintln!("Error: {ni}");
             std::process::exit(4);
         }
-        eprintln!("Error: {e:?}");
+        // Single-line chain, escaped: error text can quote paths from the image.
+        eprintln!("Error: {}", escape_control(&format!("{e:#}")));
         std::process::exit(1);
     }
 }
@@ -285,7 +359,7 @@ fn run() -> Result<()> {
                         files += 1;
                         total_bytes += meta.size;
                         if meta.mode & (S_ISUID | S_ISGID) != 0 {
-                            setuid_setgid.push(path.display().to_string());
+                            setuid_setgid.push(escape_control(&path.display().to_string()));
                         }
                     }
                     fs::EntryKind::Directory => dirs += 1,
@@ -357,7 +431,16 @@ fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_size;
+    use super::{escape_control, parse_size};
+
+    #[test]
+    fn escape_control_neutralises_terminal_sequences() {
+        let hostile = "bin/\x1b[2Jevil\nforged: line";
+        let safe = escape_control(hostile);
+        assert!(!safe.chars().any(char::is_control));
+        assert_eq!(safe, "bin/\\u{1b}[2Jevil\\nforged: line");
+        assert_eq!(escape_control("usr/bin/ünï"), "usr/bin/ünï");
+    }
 
     #[test]
     fn parse_size_handles_suffixes_and_rejects_junk() {

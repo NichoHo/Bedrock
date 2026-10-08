@@ -1,3 +1,5 @@
+pub mod archive;
+pub mod auth;
 pub mod cache;
 pub mod layout;
 pub mod manifest;

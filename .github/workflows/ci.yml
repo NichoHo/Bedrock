@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main", "master" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main", "master" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,9 +26,17 @@ jobs:
     - name: Run tests
       run: cargo test --workspace --all-targets --all-features
 
+  # Licence and advisory checks on Bedrock's own dependencies (deny.toml).
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: EmbarkStudios/cargo-deny-action@v2
+
   # BEDROCK_SPEC.md Phase 1 exit criterion: SBOMs validate against the
   # official SPDX and CycloneDX validators. One image per package database
-  # format and ecosystem parser: apk, dpkg, distroless status.d, rpm in all
+  # format and ecosystem parser: apk (Alpine and merged-/usr Wolfi), dpkg,
+  # distroless status.d, rpm in all
   # three database formats (SQLite, Berkeley DB, NDB), npm, and Python.
   sbom-validate:
     runs-on: ubuntu-latest
@@ -45,7 +53,7 @@ jobs:
         mkdir -p sboms
         for image in alpine:3.20 ubuntu:24.04 gcr.io/distroless/base-debian12 \
                      fedora:40 rockylinux:8 opensuse/leap:15.6 \
-                     node:22-alpine python:3.12-slim; do
+                     cgr.dev/chainguard/wolfi-base node:22-alpine python:3.12-slim; do
           name=$(echo "$image" | tr '/:.' '___')
           ./target/release/bedrock sbom "$image" --format spdx > "sboms/$name.spdx.json"
           ./target/release/bedrock sbom "$image" --format cyclonedx > "sboms/$name.cdx.json"
