@@ -53,11 +53,10 @@ works under the same workload; see [docs/slim.md](docs/slim.md).
 as OCI referrers that `cosign` verifies; see [docs/attest.md](docs/attest.md).
 Key-based only: keyless signing is not implemented.
 
-Everything else — `report` — parses
-its arguments (so `--help` shows the intended interface) but exits 4 with
-"not implemented yet". Reachability tracing, pruning, vulnerability matching,
-and signing don't exist yet; nothing in this tool fakes success on an
-unimplemented path.
+`bedrock report report.json --format markdown|html|terminal|json|sarif` re-renders a
+saved report (from `scan --format json` or `slim --report`). The HTML output is one
+self-contained file: no scripts, no external requests, light and dark themes, a print
+stylesheet, and severity drawn as a shape as well as a colour.
 
 ## Build and run
 

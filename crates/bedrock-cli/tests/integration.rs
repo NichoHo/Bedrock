@@ -138,16 +138,6 @@ fn inspect_rejects_directory_without_oci_layout_marker() {
 }
 
 #[test]
-fn not_implemented_commands_exit_4() {
-    Command::cargo_bin("bedrock")
-        .unwrap()
-        .args(["report", "--format", "markdown"])
-        .assert()
-        .failure()
-        .code(4);
-}
-
-#[test]
 fn inspect_refuses_an_image_built_for_another_platform() {
     let dir = tempfile::tempdir().unwrap();
     let builder = LayoutBuilder::new(dir.path());
@@ -541,4 +531,53 @@ fn attest_adds_a_signature_and_sbom_to_an_oci_layout() {
         .arg(dir.path())
         .assert()
         .success();
+}
+
+#[test]
+fn report_re_renders_a_saved_scan_report_in_every_format() {
+    let (img, db) = scan_fixture();
+    let scan = Command::cargo_bin("bedrock")
+        .unwrap()
+        .env("BEDROCK_DB_DIR", db.path())
+        .args(["scan", "--format", "json"])
+        .arg(img.path())
+        .output()
+        .unwrap();
+    assert!(scan.status.success());
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("report.json");
+    std::fs::write(&file, &scan.stdout).unwrap();
+
+    let render = |format: &str| {
+        let out = Command::cargo_bin("bedrock")
+            .unwrap()
+            .args(["report", "--format", format])
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{format}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let md = render("markdown");
+    assert!(md.starts_with("# Bedrock report") && md.contains("CVE-2024-0001"), "{md}");
+    let html = render("html");
+    assert!(
+        html.starts_with("<!doctype html>")
+            && html.contains("CVE-2024-0001")
+            && !html.contains("<script")
+    );
+    assert!(render("terminal").contains("CVE-2024-0003"));
+    assert!(render("sarif").contains("\"version\": \"2.1.0\""));
+    let json: serde_json::Value = serde_json::from_str(&render("json")).unwrap();
+    assert_eq!(json["schema_version"], "1");
+
+    // Not a report: a clear error, not a panic.
+    std::fs::write(dir.path().join("bad.json"), b"{}").unwrap();
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["report"])
+        .arg(dir.path().join("bad.json"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a Bedrock report"));
 }

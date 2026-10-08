@@ -136,10 +136,15 @@ enum Commands {
         #[command(flatten)]
         limits: LimitArgs,
     },
-    /// Render a saved prune report (not yet implemented — see BEDROCK_SPEC.md Phase 6)
+    /// Re-render a saved JSON report (from `scan` or `slim --report`)
     Report {
-        #[arg(long, default_value = "markdown")]
-        format: String,
+        /// A report.json written by `bedrock scan --format json` or `bedrock slim --report`
+        file: PathBuf,
+        #[arg(long, value_enum, default_value_t = RenderFormat::Markdown)]
+        format: RenderFormat,
+        /// Write to this file instead of stdout
+        #[arg(long, short)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -279,6 +284,15 @@ impl From<FailOn> for vuln::Severity {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum RenderFormat {
+    Terminal,
+    Json,
+    Sarif,
+    Markdown,
+    Html,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum ScanFormat {
     Terminal,
     Json,
@@ -302,24 +316,6 @@ enum DbAction {
     Update,
     /// Report on the currently cached advisory snapshot, if any
     Status,
-}
-
-/// Marks a command whose interface exists (it parses, and matches the design
-/// in BEDROCK_SPEC.md) but whose implementation doesn't exist yet. Identified
-/// by type rather than by matching an error string, so it survives any
-/// `.context()` wrapping applied between where it's raised and `main`.
-#[derive(Debug)]
-struct NotImplemented(&'static str);
-
-impl std::fmt::Display for NotImplemented {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "`{}` is not implemented yet (see BEDROCK_SPEC.md for the roadmap)", self.0)
-    }
-}
-impl std::error::Error for NotImplemented {}
-
-fn not_implemented<T>(what: &'static str) -> Result<T> {
-    Err(NotImplemented(what).into())
 }
 
 /// Resolves a blob digest to its local path on disk.
@@ -436,10 +432,6 @@ fn check_platform(
 
 fn main() {
     if let Err(e) = run() {
-        if let Some(ni) = e.downcast_ref::<NotImplemented>() {
-            eprintln!("Error: {ni}");
-            std::process::exit(4);
-        }
         if e.downcast_ref::<EnvironmentError>().is_some()
             || e.downcast_ref::<bedrock::trace::TraceError>().is_some()
         {
@@ -864,7 +856,25 @@ fn run() -> Result<()> {
                 println!("{}  {}", a.digest, a.predicate_type);
             }
         }
-        Commands::Report { .. } => not_implemented("report")?,
+        Commands::Report { file, format, output } => {
+            let report: report::Report = serde_json::from_slice(
+                &std::fs::read(file)
+                    .with_context(|| format!("failed to read {}", file.display()))?,
+            )
+            .with_context(|| format!("{} is not a Bedrock report", file.display()))?;
+            let rendered = match format {
+                RenderFormat::Terminal => report.to_terminal(),
+                RenderFormat::Json => report.to_json(),
+                RenderFormat::Sarif => report::sarif::to_sarif(&report),
+                RenderFormat::Markdown => report::markdown::to_markdown(&report),
+                RenderFormat::Html => report::html::to_html(&report),
+            };
+            match output {
+                Some(path) => std::fs::write(path, rendered)
+                    .with_context(|| format!("failed to write {}", path.display()))?,
+                None => print!("{rendered}"),
+            }
+        }
     }
 
     Ok(())

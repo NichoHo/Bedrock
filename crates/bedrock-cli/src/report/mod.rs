@@ -3,6 +3,8 @@
 //! as new optional fields. Within a major `schema_version` fields are only
 //! ever added, never renamed or removed, so `report` can re-render any older
 //! saved report.
+pub mod html;
+pub mod markdown;
 pub mod sarif;
 
 use crate::vuln::Severity;

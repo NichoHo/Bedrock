@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `report`: re-render a saved report as Markdown, a self-contained HTML page, terminal text,
+  JSON or SARIF.
 - `attest`: key-based signing with cosign-compatible keys; SLSA provenance, SPDX SBOM and
   report attestations as Sigstore-bundle OCI referrers; registry push support (plain HTTP
   for loopback registries). Keyless signing is not implemented.
