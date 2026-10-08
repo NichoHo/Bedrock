@@ -133,6 +133,7 @@ mod tests {
             name: name.into(),
             version: v.into(),
             architecture: None,
+            source: None,
             purl: format!("pkg:npm/{name}@{v}"),
             files: files.iter().map(PathBuf::from).collect(),
         }

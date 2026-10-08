@@ -15,6 +15,10 @@ pub struct Package {
     pub name: String,
     pub version: String,
     pub architecture: Option<String>,
+    /// Name of the source package (dpkg `Source:`, apk `o:`, rpm SOURCERPM)
+    /// when the package manager records one. Advisory feeds for Debian and
+    /// Alpine are keyed by it, not by the binary package name.
+    pub source: Option<String>,
     pub purl: String,
     pub files: Vec<PathBuf>,
 }

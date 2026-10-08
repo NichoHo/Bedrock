@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use bedrock::fs::{self, FileInventory};
 use bedrock::oci::archive::DockerArchive;
 use bedrock::oci::{Cache, ImageReference, Manifest, OciLayout, RegistryClient};
-use bedrock::{sbom, vuln};
+use bedrock::{escape_control, report, sbom, vuln};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -42,13 +42,22 @@ enum Commands {
         #[command(subcommand)]
         action: DbAction,
     },
-    /// Scan an image for vulnerabilities (not yet implemented — see BEDROCK_SPEC.md Phase 2)
+    /// Scan an image for known vulnerabilities, using the local advisory snapshot
     Scan {
         image: String,
-        #[arg(long)]
-        fail_on: Option<String>,
-        #[arg(long, default_value = "terminal")]
-        format: String,
+        /// Exit 1 if any finding has at least this severity. Unrated findings never fail the gate
+        #[arg(long, value_enum)]
+        fail_on: Option<FailOn>,
+        #[arg(long, value_enum, default_value_t = ScanFormat::Terminal)]
+        format: ScanFormat,
+        /// Write the report to this file instead of stdout
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Target platform as os/arch (e.g. linux/arm64). Defaults to this machine's architecture
+        #[arg(long, default_value_t = default_platform())]
+        platform: String,
+        #[command(flatten)]
+        limits: LimitArgs,
     },
     /// Trace an image's reachability (not yet implemented — see BEDROCK_SPEC.md Phase 3)
     Trace {
@@ -126,9 +135,46 @@ fn parse_size(s: &str) -> std::result::Result<u64, String> {
     n.checked_mul(1 << shift).ok_or_else(|| format!("size {s:?} is too large"))
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum FailOn {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<FailOn> for vuln::Severity {
+    fn from(f: FailOn) -> Self {
+        match f {
+            FailOn::Low => Self::Low,
+            FailOn::Medium => Self::Medium,
+            FailOn::High => Self::High,
+            FailOn::Critical => Self::Critical,
+        }
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ScanFormat {
+    Terminal,
+    Json,
+    Sarif,
+}
+
+/// An error that maps to a documented exit code (BEDROCK_SPEC.md 7.4).
+#[derive(Debug)]
+struct EnvironmentError(String);
+
+impl std::fmt::Display for EnvironmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for EnvironmentError {}
+
 #[derive(Subcommand)]
 enum DbAction {
-    /// Fetch a fresh advisory snapshot (not yet implemented — see BEDROCK_SPEC.md Phase 2)
+    /// Fetch a fresh advisory snapshot (OSV, Debian, Alpine, Red Hat). Uses the network.
     Update,
     /// Report on the currently cached advisory snapshot, if any
     Status,
@@ -168,15 +214,6 @@ fn default_platform() -> String {
         other => other,
     };
     format!("linux/{arch}")
-}
-
-/// Makes text from inside an image safe to print: control characters (ESC,
-/// newlines, ...) become visible `\u{..}` escapes, so a crafted filename can't
-/// inject terminal escape sequences or forge output lines.
-fn escape_control(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| if c.is_control() { c.escape_default().collect() } else { vec![c] })
-        .collect()
 }
 
 fn parse_platform(platform: &str) -> Result<(String, String)> {
@@ -323,6 +360,10 @@ fn main() {
             eprintln!("Error: {ni}");
             std::process::exit(4);
         }
+        if e.downcast_ref::<EnvironmentError>().is_some() {
+            eprintln!("Error: {}", escape_control(&format!("{e:#}")));
+            std::process::exit(4);
+        }
         // Single-line chain, escaped: error text can quote paths from the image.
         eprintln!("Error: {}", escape_control(&format!("{e:#}")));
         std::process::exit(1);
@@ -406,20 +447,103 @@ fn run() -> Result<()> {
         Commands::Db { action } => {
             let db = vuln::VulnerabilityDb::new().context("failed to init vulnerability db")?;
             match action {
-                DbAction::Update => not_implemented("db update")?,
+                DbAction::Update => {
+                    let m = vuln::feeds::update(&db).context("db update failed")?;
+                    println!(
+                        "Snapshot {}: {} advisories from {} sources",
+                        &m.digest[..12],
+                        m.advisories(),
+                        m.files.len()
+                    );
+                }
                 DbAction::Status => {
-                    if let Some(meta) = db.status().context("failed to check DB status")? {
+                    if let Some(m) = db.manifest().context("failed to read snapshot manifest")? {
                         println!(
-                            "Database status: {} entries. Last update: {}",
-                            meta.entries_count, meta.updated_at
+                            "Snapshot {} ({} advisories), updated {}",
+                            &m.digest[..12],
+                            m.advisories(),
+                            m.updated_at
                         );
+                        for f in &m.files {
+                            println!("  {:<16} {:>8}", f.source, f.advisories);
+                        }
+                        if m.age_days().is_some_and(|d| d > 7) {
+                            eprintln!(
+                                "warning: snapshot is over 7 days old; run `bedrock db update`"
+                            );
+                        }
                     } else {
                         println!("Database is empty. Run `bedrock db update`.");
                     }
                 }
             }
         }
-        Commands::Scan { .. } => not_implemented("scan")?,
+        Commands::Scan { image, fail_on, format, output, platform, limits } => {
+            let (os, arch) = parse_platform(platform)?;
+            let cache = Cache::new().context("failed to initialize cache")?;
+            let reference = ImageReference::parse(image)?;
+            let (manifest, blob_path) = resolve_image(&reference, &cache, &os, &arch)?;
+            let inventory = build_inventory(&manifest, &*blob_path, limits.limits())?;
+            let resolver = |digest: &str| -> Option<PathBuf> {
+                let p = blob_path(digest).ok()?;
+                p.exists().then_some(p)
+            };
+            let packages = parse_all_packages(&inventory, resolver);
+
+            // A missing or damaged snapshot is an environment problem (exit 4):
+            // never scan against half a database.
+            let db = vuln::VulnerabilityDb::new().context("failed to init vulnerability db")?;
+            let snapshot =
+                db.manifest().map_err(|e| EnvironmentError(format!("{e:#}")))?.ok_or_else(
+                    || EnvironmentError("no advisory snapshot; run `bedrock db update`".into()),
+                )?;
+            if snapshot.age_days().is_some_and(|d| d > 7) {
+                eprintln!("warning: advisory snapshot is over 7 days old; run `bedrock db update`");
+            }
+            let outcome = vuln::matcher::scan(&packages, &db)
+                .map_err(|e| EnvironmentError(format!("{e:#}")))?;
+
+            let summary = report::ImageSummary {
+                reference: image.clone(),
+                digest: manifest.config.digest.clone(),
+                platform: platform.clone(),
+                size_bytes: manifest.layers.iter().map(|l| l.size).sum(),
+                layers: manifest.layers.len(),
+                packages: packages.len(),
+                findings_by_severity: Default::default(),
+            };
+            let snapshot_ref = report::SnapshotRef {
+                digest: snapshot.digest.clone(),
+                updated_at: snapshot.updated_at.clone(),
+            };
+            let report =
+                report::Report::new(summary, snapshot_ref, outcome.findings, outcome.notes);
+
+            let rendered = match format {
+                ScanFormat::Terminal => report.to_terminal(),
+                ScanFormat::Json => report.to_json(),
+                ScanFormat::Sarif => report::sarif::to_sarif(&report),
+            };
+            match output {
+                Some(path) => std::fs::write(
+                    path,
+                    rendered
+                        + "
+",
+                )
+                .with_context(|| format!("failed to write {}", path.display()))?,
+                None => println!("{rendered}"),
+            }
+
+            if let Some(threshold) = fail_on {
+                let threshold: vuln::Severity = (*threshold).into();
+                let n = report.count_at_least(threshold);
+                if n > 0 {
+                    eprintln!("{n} finding(s) at or above {}", threshold.as_str());
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Trace { .. } => not_implemented("trace")?,
         Commands::Slim { .. } => not_implemented("slim")?,
         Commands::Attest { .. } => not_implemented("attest")?,

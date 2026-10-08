@@ -67,7 +67,14 @@ where
         }
         by_dir.insert(dir, packages.len());
         let purl = format!("pkg:npm/{}@{}", name.replace('@', "%40"), version);
-        packages.push(Package { name, version, architecture: None, purl, files: Vec::new() });
+        packages.push(Package {
+            name,
+            version,
+            architecture: None,
+            source: None,
+            purl,
+            files: Vec::new(),
+        });
     }
 
     // Assign every file to the innermost package directory containing it, so

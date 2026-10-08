@@ -139,7 +139,7 @@ fn inspect_rejects_directory_without_oci_layout_marker() {
 
 #[test]
 fn not_implemented_commands_exit_4() {
-    Command::cargo_bin("bedrock").unwrap().args(["scan", "whatever"]).assert().failure().code(4);
+    Command::cargo_bin("bedrock").unwrap().args(["trace", "whatever"]).assert().failure().code(4);
 }
 
 #[test]
@@ -212,4 +212,105 @@ fn inspect_reads_a_docker_save_archive() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Files: 2"));
+}
+
+/// A Debian 12 image with a vulnerable libssl3 (binary of source `openssl`),
+/// a patched zlib, and a vulnerable PyPI package; plus a snapshot to scan it with.
+fn scan_fixture() -> (tempfile::TempDir, tempfile::TempDir) {
+    use bedrock::vuln::advisory::{Advisory, Affected, Range, Severity};
+    let img = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(img.path());
+    let status = b"Package: libssl3\nStatus: install ok installed\nArchitecture: amd64\nSource: openssl\nVersion: 3.0.9-1\n\n\
+                   Package: zlib1g\nStatus: install ok installed\nArchitecture: amd64\nSource: zlib\nVersion: 1:1.2.13.dfsg-1+deb12u1\n\n";
+    let metadata = b"Metadata-Version: 2.1\nName: requests\nVersion: 2.25.1\n";
+    let layer = builder.layer(&[
+        ("etc/os-release", b"ID=debian\nVERSION_ID=\"12\"\n"),
+        ("var/lib/dpkg/status", status),
+        ("usr/lib/python3.9/site-packages/requests-2.25.1.dist-info/METADATA", metadata),
+    ]);
+    builder.finish(&[layer]);
+
+    let adv = |id: &str, sev, eco: &str, name: &str, fixed: &str| Advisory {
+        id: id.into(),
+        aliases: vec![],
+        severity: Some(sev),
+        cvss: None,
+        affected: vec![Affected {
+            ecosystem: eco.into(),
+            name: name.into(),
+            ranges: vec![Range::up_to(Some(fixed))],
+            versions: vec![],
+        }],
+    };
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = bedrock::vuln::VulnerabilityDb::at(db_dir.path().into()).unwrap();
+    db.replace(vec![
+        (
+            "debian".into(),
+            vec![
+                adv("CVE-2024-0001", Severity::High, "Debian:12", "openssl", "3.0.11-1~deb12u2"),
+                adv(
+                    "CVE-2024-0002",
+                    Severity::Critical,
+                    "Debian:12",
+                    "zlib",
+                    "1:1.2.13.dfsg-1+deb12u1",
+                ),
+            ],
+        ),
+        (
+            "osv-PyPI".into(),
+            vec![adv("CVE-2024-0003", Severity::Low, "PyPI", "requests", "2.31.0")],
+        ),
+    ])
+    .unwrap();
+    (img, db_dir)
+}
+
+#[test]
+fn scan_without_a_snapshot_exits_4() {
+    let (img, _db) = scan_fixture();
+    let empty = tempfile::tempdir().unwrap();
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .env("BEDROCK_DB_DIR", empty.path())
+        .arg("scan")
+        .arg(img.path())
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains("bedrock db update"));
+}
+
+#[test]
+fn scan_reports_backport_aware_findings_and_gates_with_fail_on() {
+    let (img, db) = scan_fixture();
+    let run = |args: &[&str]| {
+        Command::cargo_bin("bedrock")
+            .unwrap()
+            .env("BEDROCK_DB_DIR", db.path())
+            .arg("scan")
+            .arg(img.path())
+            .args(args)
+            .assert()
+    };
+
+    let out = run(&["--format", "json"]).success().get_output().stdout.clone();
+    let report: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(report["schema_version"], "1");
+    let ids: Vec<&str> =
+        report["findings"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    // zlib carries the +deb12u1 backport, so CVE-2024-0002 must not appear.
+    assert_eq!(ids, ["CVE-2024-0001", "CVE-2024-0003"]);
+    assert_eq!(report["input"]["findings_by_severity"]["high"], 1);
+    assert_eq!(report["findings"][0]["fixed_package"], "openssl");
+
+    run(&["--fail-on", "high"]).failure().code(1);
+    run(&["--fail-on", "critical"]).success();
+
+    let out = run(&["--format", "sarif"]).success().get_output().stdout.clone();
+    let sarif: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(sarif["version"], "2.1.0");
+    assert_eq!(sarif["runs"][0]["results"].as_array().unwrap().len(), 2);
+    assert_eq!(sarif["runs"][0]["results"][0]["level"], "error");
 }

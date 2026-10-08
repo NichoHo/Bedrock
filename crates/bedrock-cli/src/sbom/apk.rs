@@ -27,6 +27,7 @@ pub fn parse_status(db_text: &str, namespace: &str, distro_version: Option<&str>
     let mut name: Option<String> = None;
     let mut ver: Option<String> = None;
     let mut arch: Option<String> = None;
+    let mut origin: Option<String> = None;
     let mut files: Vec<PathBuf> = Vec::new();
     let mut dir = String::new();
 
@@ -34,6 +35,7 @@ pub fn parse_status(db_text: &str, namespace: &str, distro_version: Option<&str>
     let mut flush = |name: &mut Option<String>,
                      ver: &mut Option<String>,
                      arch: &mut Option<String>,
+                     origin: &mut Option<String>,
                      files: &mut Vec<PathBuf>| {
         if let (Some(n), Some(v)) = (name.take(), ver.take()) {
             let a = arch.clone().unwrap_or_else(|| "x86_64".to_string());
@@ -44,16 +46,18 @@ pub fn parse_status(db_text: &str, namespace: &str, distro_version: Option<&str>
                 name: n,
                 version: v,
                 architecture: arch.take(),
+                source: origin.take(),
                 files: std::mem::take(files),
             });
         }
         *arch = None;
+        *origin = None;
         files.clear();
     };
 
     for line in db_text.lines() {
         if line.is_empty() {
-            flush(&mut name, &mut ver, &mut arch, &mut files);
+            flush(&mut name, &mut ver, &mut arch, &mut origin, &mut files);
             dir.clear();
         } else if let Some(rest) = line.strip_prefix("P:") {
             name = Some(rest.trim().to_string());
@@ -61,6 +65,8 @@ pub fn parse_status(db_text: &str, namespace: &str, distro_version: Option<&str>
             ver = Some(rest.trim().to_string());
         } else if let Some(rest) = line.strip_prefix("A:") {
             arch = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("o:") {
+            origin = Some(rest.trim().to_string());
         } else if let Some(rest) = line.strip_prefix("F:") {
             dir = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("R:") {
@@ -71,7 +77,7 @@ pub fn parse_status(db_text: &str, namespace: &str, distro_version: Option<&str>
             }));
         }
     }
-    flush(&mut name, &mut ver, &mut arch, &mut files);
+    flush(&mut name, &mut ver, &mut arch, &mut origin, &mut files);
 
     packages
 }

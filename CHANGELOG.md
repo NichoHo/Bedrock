@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `db update` / `db status`: OSV (PyPI, npm, Go, crates.io) plus the Debian, Alpine and
+  Red Hat trackers, stored as digest-checked files with a manifest.
+- `scan`: dpkg, apk, rpm, semver and PEP 440 version comparison; distro
+  packages match only their own feed; `--fail-on`, JSON (`schema_version` 1) and
+  SARIF 2.1 output.
 - `inspect` and `sbom` read `docker save` archives (`image.tar`).
 - Private registries: credentials come from Docker's `config.json`
   (`auths`, `credHelpers`, `credsStore`). Bedrock never stores them.

@@ -143,7 +143,7 @@ where
         files.dedup();
 
         let purl = format!("pkg:pypi/{}@{}", normalize_name(&name), version);
-        packages.push(Package { name, version, architecture: None, purl, files });
+        packages.push(Package { name, version, architecture: None, source: None, purl, files });
     }
     Ok(packages)
 }

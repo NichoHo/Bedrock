@@ -29,7 +29,20 @@ Private registries work after `docker login`: Bedrock reads Docker's `config.jso
 and credential helpers on each run and stores nothing.
 `--platform` defaults to your machine's architecture (for example `linux/arm64` on Apple silicon).
 
-Everything else — `scan`, `trace`, `slim`, `attest`, `report`, `db update` — parses
+`bedrock db update` fetches the advisory snapshot (OSV for PyPI, npm, Go and
+crates.io; the Debian, Alpine and Red Hat trackers for distro packages) into your
+cache dir. It is the only command that needs the network besides image pulls.
+`bedrock db status` shows its digest, counts and age.
+
+`bedrock scan <image>` matches the image's packages against that snapshot.
+Distro packages match only their own distribution's feed (so backported fixes
+are respected); npm and PyPI packages match OSV. Releases the snapshot has no
+data for (Ubuntu, Fedora, EOL Debian) are listed as "not assessed", never
+reported as clean. `--format terminal|json|sarif`, `--output FILE`, and
+`--fail-on low|medium|high|critical` (exit 1; findings with no rating never
+fail the gate). A missing or damaged snapshot exits 4.
+
+Everything else — `trace`, `slim`, `attest`, `report` — parses
 its arguments (so `--help` shows the intended interface) but exits 4 with
 "not implemented yet". Reachability tracing, pruning, vulnerability matching,
 and signing don't exist yet; nothing in this tool fakes success on an

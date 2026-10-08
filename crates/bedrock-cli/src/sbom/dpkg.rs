@@ -131,7 +131,8 @@ fn parse_stanzas(
     let mut packages = Vec::new();
     // Chaining an empty line onto the input flushes the last stanza even when
     // the file doesn't end with a blank line.
-    let [mut name, mut version, mut arch, mut status]: [Option<String>; 4] = Default::default();
+    let [mut name, mut version, mut arch, mut status, mut source]: [Option<String>; 5] =
+        Default::default();
     for line in text.lines().chain(std::iter::once("")) {
         if line.trim().is_empty() {
             // dpkg status lines are "Status: <want> <flag> <state>". Only
@@ -155,11 +156,12 @@ fn parse_stanzas(
                     name: n,
                     version: v,
                     architecture: Some(a),
+                    source: source.take(),
                     purl,
                     files: Vec::new(),
                 });
             }
-            (name, version, arch) = (None, None, None);
+            (name, version, arch, source) = (None, None, None, None);
             continue;
         }
         let Some((key, value)) = line.split_once(':') else { continue };
@@ -169,6 +171,8 @@ fn parse_stanzas(
             "Version" => version = Some(value),
             "Architecture" => arch = Some(value),
             "Status" => status = Some(value),
+            // "Source: glibc (2.36-9)": the name is the first word.
+            "Source" => source = value.split_whitespace().next().map(String::from),
             _ => {}
         }
     }

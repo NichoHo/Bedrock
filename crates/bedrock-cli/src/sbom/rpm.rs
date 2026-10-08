@@ -66,6 +66,7 @@ const TAG_VERSION: i32 = 1001;
 const TAG_RELEASE: i32 = 1002;
 const TAG_EPOCH: i32 = 1003;
 const TAG_ARCH: i32 = 1022;
+const TAG_SOURCERPM: i32 = 1044;
 const TAG_OLDFILENAMES: i32 = 1027;
 const TAG_DIRINDEXES: i32 = 1116;
 const TAG_BASENAMES: i32 = 1117;
@@ -197,6 +198,7 @@ impl<'a> Header<'a> {
                 None => evr,
             },
             architecture: arch,
+            source: self.string(TAG_SOURCERPM)?.as_deref().and_then(srpm_name),
             purl,
             files: self.files()?,
         }))
@@ -349,6 +351,16 @@ fn bdb_blobs(db: &[u8]) -> Result<Vec<Vec<u8>>> {
     Ok(blobs)
 }
 
+/// `bash-5.2.26-3.fc40.src.rpm` -> `bash`.
+fn srpm_name(srpm: &str) -> Option<String> {
+    let base =
+        srpm.strip_suffix(".rpm")?.strip_suffix(".src").or_else(|| srpm.strip_suffix(".rpm"))?;
+    let mut parts = base.rsplitn(3, '-');
+    parts.next()?;
+    parts.next()?;
+    parts.next().map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +399,16 @@ mod tests {
             (TAG_BASENAMES, TYPE_STRING_ARRAY, 2, b"bash\0bashrc\0"),
             (TAG_DIRINDEXES, TYPE_INT32, 2, &[0, 0, 0, 0, 0, 0, 0, 1]),
         ])
+    }
+
+    #[test]
+    fn srpm_names() {
+        assert_eq!(srpm_name("bash-5.2.26-3.fc40.src.rpm").as_deref(), Some("bash"));
+        assert_eq!(
+            srpm_name("python-dateutil-2.8.2-1.el9.src.rpm").as_deref(),
+            Some("python-dateutil")
+        );
+        assert_eq!(srpm_name("(none)"), None);
     }
 
     #[test]
