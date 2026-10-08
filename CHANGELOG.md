@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `trace`: ptrace sandbox with script, HTTP and duration workloads, symlink-aware
+  path resolution, static ELF/shebang closure, and package coverage figures.
 - `db update` / `db status`: OSV (PyPI, npm, Go, crates.io) plus the Debian, Alpine and
   Red Hat trackers, stored as digest-checked files with a manifest.
 - `scan`: dpkg, apk, rpm, semver and PEP 440 version comparison; distro

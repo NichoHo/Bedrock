@@ -8,6 +8,7 @@ pub mod fs;
 pub mod oci;
 pub mod report;
 pub mod sbom;
+pub mod trace;
 pub mod vuln;
 
 /// Makes text from inside an image safe to print: control characters (ESC,

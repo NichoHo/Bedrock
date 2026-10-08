@@ -42,7 +42,11 @@ reported as clean. `--format terminal|json|sarif`, `--output FILE`, and
 `--fail-on low|medium|high|critical` (exit 1; findings with no rating never
 fail the gate). A missing or damaged snapshot exits 4.
 
-Everything else — `trace`, `slim`, `attest`, `report` — parses
+`bedrock trace` runs the entrypoint under ptrace with a workload and prints the
+set of image files it reached (Linux only; see
+[docs/reachability-trace.md](docs/reachability-trace.md) for usage and limits).
+
+Everything else — `slim`, `attest`, `report` — parses
 its arguments (so `--help` shows the intended interface) but exits 4 with
 "not implemented yet". Reachability tracing, pruning, vulnerability matching,
 and signing don't exist yet; nothing in this tool fakes success on an

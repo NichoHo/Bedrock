@@ -280,6 +280,93 @@ impl FileInventory {
     }
 }
 
+#[cfg(unix)]
+impl FileInventory {
+    /// Writes the merged filesystem under `dest`. `layers` are (digest, tar
+    /// path) in image order. A path is taken from the layer the inventory says
+    /// won, so whiteouts and overrides need no second implementation here.
+    ///
+    /// Entries are placed with symlinks resolved *inside* `dest`, so a hostile
+    /// layer cannot write through `lib -> /etc` to the host. Ownership is not
+    /// preserved (the caller is usually unprivileged), setuid bits are
+    /// dropped, and owner read/write is added so the tree stays manageable.
+    pub fn materialize(&self, dest: &Path, layers: &[(String, PathBuf)]) -> Result<()> {
+        use crate::trace::resolve::resolve;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let escape = |p: &Path| FsError::HostileEntry(p.to_path_buf());
+        // Where `path` lands on the host: parent resolved through in-image links.
+        let place = |path: &Path| -> Result<PathBuf> {
+            let parent = path.parent().unwrap_or(Path::new(""));
+            let r = resolve(dest, parent, true).ok_or_else(|| escape(path))?;
+            let dir = dest.join(&r.real);
+            std::fs::create_dir_all(&dir).map_err(|_| escape(path))?;
+            Ok(dir.join(path.file_name().ok_or_else(|| escape(path))?))
+        };
+        let clear = |p: &Path| {
+            if let Ok(m) = std::fs::symlink_metadata(p) {
+                if !m.is_dir() {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        };
+
+        let mut hardlinks: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for (digest, tar_path) in layers {
+            let mut archive = open_archive(tar_path)?;
+            for entry in archive.entries()? {
+                let mut entry = entry?;
+                let raw = entry.path()?;
+                reject_hostile_path(&raw)?;
+                let path = strip_leading_curdir(&raw);
+                let Some(meta) = self.files.get(&path) else { continue };
+                if &meta.layer_digest != digest || path.as_os_str().is_empty() {
+                    continue;
+                }
+                let target = place(&path)?;
+                let mode = meta.mode & 0o777;
+                match &meta.kind {
+                    EntryKind::Directory => {
+                        std::fs::create_dir_all(&target)?;
+                        std::fs::set_permissions(
+                            &target,
+                            std::fs::Permissions::from_mode(mode | 0o700),
+                        )?;
+                    }
+                    EntryKind::File => {
+                        clear(&target);
+                        let mut out = File::create(&target)?;
+                        std::io::copy(&mut entry, &mut out)?;
+                        std::fs::set_permissions(
+                            &target,
+                            std::fs::Permissions::from_mode(mode | 0o600),
+                        )?;
+                    }
+                    EntryKind::Symlink(link) => {
+                        clear(&target);
+                        symlink(link, &target)?;
+                    }
+                    EntryKind::HardLink(link) => {
+                        hardlinks.push((path.clone(), strip_leading_curdir(link)))
+                    }
+                    EntryKind::Other => {}
+                }
+            }
+        }
+        // Hard-link targets may live in a later-processed layer than the link.
+        for (path, link) in hardlinks {
+            let target = place(&path)?;
+            let src = resolve(dest, &link, false).ok_or_else(|| escape(&path))?;
+            clear(&target);
+            let src = dest.join(src.real);
+            if std::fs::hard_link(&src, &target).is_err() {
+                std::fs::copy(&src, &target)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +395,33 @@ mod tests {
         }
         builder.into_inner().unwrap().finish().unwrap().flush().unwrap();
         file
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn materialize_confines_writes_to_the_destination_and_applies_overrides() {
+        use std::os::unix::fs::symlink;
+        let lower = write_tar_gz(&[("etc/hosts", b"old"), ("bin/sh", b"shell")]);
+        let upper = write_tar_gz(&[("etc/hosts", b"new")]);
+        let mut inv = FileInventory::new();
+        inv.apply_layer(lower.path(), "l1").unwrap();
+        inv.apply_layer(upper.path(), "l2").unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // A pre-existing link pointing at an absolute host path must stay inside dest.
+        std::fs::create_dir_all(dest.path().join("etc")).unwrap();
+        symlink(outside.path(), dest.path().join("bin")).unwrap();
+        inv.materialize(
+            dest.path(),
+            &[("l1".into(), lower.path().into()), ("l2".into(), upper.path().into())],
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(dest.path().join("etc/hosts")).unwrap(), b"new");
+        assert!(
+            std::fs::read_dir(outside.path()).unwrap().next().is_none(),
+            "wrote through a symlink"
+        );
+        assert!(dest.path().join(outside.path().strip_prefix("/").unwrap()).join("sh").exists());
     }
 
     #[test]

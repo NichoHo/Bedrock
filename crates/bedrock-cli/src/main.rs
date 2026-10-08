@@ -59,15 +59,22 @@ enum Commands {
         #[command(flatten)]
         limits: LimitArgs,
     },
-    /// Trace an image's reachability (not yet implemented — see BEDROCK_SPEC.md Phase 3)
+    /// Run an image's entrypoint under ptrace with a workload and report which files it reached
     Trace {
         image: String,
-        #[arg(long)]
-        workload: Option<String>,
-        #[arg(long)]
-        workload_http: Option<String>,
-        #[arg(long)]
-        workload_duration: Option<String>,
+        #[command(flatten)]
+        workload: WorkloadArgs,
+        /// Write the reach set (JSON) to this file instead of stdout
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Target platform as os/arch (e.g. linux/arm64). Defaults to this machine's architecture
+        #[arg(long, default_value_t = default_platform())]
+        platform: String,
+        #[command(flatten)]
+        limits: LimitArgs,
+        /// Replace the image's Cmd (arguments after `--`)
+        #[arg(last = true)]
+        cmd: Vec<String>,
     },
     /// Prune and verify an image (not yet implemented — see BEDROCK_SPEC.md Phase 4)
     Slim {
@@ -133,6 +140,32 @@ fn parse_size(s: &str) -> std::result::Result<u64, String> {
     let n: u64 =
         digits.parse().map_err(|_| format!("invalid size {s:?}, expected e.g. 500M or 16G"))?;
     n.checked_mul(1 << shift).ok_or_else(|| format!("size {s:?} is too large"))
+}
+
+/// How to exercise the entrypoint while it is traced. Exactly one workload is required.
+#[derive(Args)]
+struct WorkloadArgs {
+    /// Script run on the host once the entrypoint is ready (needs --ready-port or --ready-log-pattern)
+    #[arg(long)]
+    workload: Option<PathBuf>,
+    /// .http file of requests replayed against the container (needs --ready-port)
+    #[arg(long)]
+    workload_http: Option<PathBuf>,
+    /// Run idle for this long, e.g. 30s. Captures startup only: the weakest option
+    #[arg(long)]
+    workload_duration: Option<String>,
+    /// Port on 127.0.0.1 that accepts connections once the entrypoint is ready
+    #[arg(long)]
+    ready_port: Option<u16>,
+    /// Text in the entrypoint's output that means it is ready (plain substring)
+    #[arg(long)]
+    ready_log_pattern: Option<String>,
+    /// Give up waiting for readiness after this long
+    #[arg(long, default_value = "30s")]
+    ready_timeout: String,
+    /// Stop the whole run after this long
+    #[arg(long, default_value = "10m")]
+    timeout: String,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -360,7 +393,9 @@ fn main() {
             eprintln!("Error: {ni}");
             std::process::exit(4);
         }
-        if e.downcast_ref::<EnvironmentError>().is_some() {
+        if e.downcast_ref::<EnvironmentError>().is_some()
+            || e.downcast_ref::<bedrock::trace::TraceError>().is_some()
+        {
             eprintln!("Error: {}", escape_control(&format!("{e:#}")));
             std::process::exit(4);
         }
@@ -544,7 +579,90 @@ fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Trace { .. } => not_implemented("trace")?,
+        Commands::Trace { image, workload: w, output, platform, limits, cmd } => {
+            use bedrock::trace::workload::{parse_duration, Readiness, Workload};
+            let usage = |msg: &str| -> ! {
+                eprintln!("Error: {msg}");
+                std::process::exit(3)
+            };
+            let chosen =
+                [w.workload.is_some(), w.workload_http.is_some(), w.workload_duration.is_some()];
+            if chosen.iter().filter(|c| **c).count() != 1 {
+                usage("give exactly one of --workload, --workload-http, --workload-duration");
+            }
+            let workload = match (&w.workload, &w.workload_http, &w.workload_duration) {
+                (Some(p), _, _) => Workload::Script(p.clone()),
+                (_, Some(p), _) => Workload::Http(p.clone()),
+                (_, _, Some(d)) => Workload::Duration(parse_duration(d)?),
+                _ => unreachable!("checked above"),
+            };
+            if matches!(workload, Workload::Script(_))
+                && w.ready_port.is_none()
+                && w.ready_log_pattern.is_none()
+            {
+                usage("--workload needs --ready-port or --ready-log-pattern, so it knows when to start");
+            }
+            if matches!(workload, Workload::Http(_)) && w.ready_port.is_none() {
+                usage("--workload-http needs --ready-port, the port the requests are sent to");
+            }
+
+            let (os, arch) = parse_platform(platform)?;
+            let cache = Cache::new().context("failed to initialize cache")?;
+            let reference = ImageReference::parse(image)?;
+            let (manifest, blob_path) = resolve_image(&reference, &cache, &os, &arch)?;
+            let inventory = build_inventory(&manifest, &*blob_path, limits.limits())?;
+            let resolver = |digest: &str| -> Option<PathBuf> {
+                let p = blob_path(digest).ok()?;
+                p.exists().then_some(p)
+            };
+            let packages = parse_all_packages(&inventory, resolver);
+            let layers = manifest
+                .layers
+                .iter()
+                .map(|l| Ok((l.digest.clone(), blob_path(&l.digest)?)))
+                .collect::<Result<Vec<_>>>()?;
+            let config_json = std::fs::read(blob_path(&manifest.config.digest)?)
+                .context("failed to read the image config")?;
+
+            let reach = bedrock::trace::run(bedrock::trace::TraceRequest {
+                image: bedrock::trace::ImageRef {
+                    reference: image.clone(),
+                    digest: manifest.config.digest.clone(),
+                    platform: platform.clone(),
+                },
+                inventory: &inventory,
+                layers,
+                config_json,
+                cmd_override: (!cmd.is_empty()).then(|| cmd.clone()),
+                packages: &packages,
+                workload,
+                readiness: Readiness {
+                    port: w.ready_port,
+                    log_pattern: w.ready_log_pattern.clone(),
+                },
+                ready_timeout: parse_duration(&w.ready_timeout)?,
+                timeout: parse_duration(&w.timeout)?,
+            })?;
+            let json = serde_json::to_string_pretty(&reach)?;
+            match output {
+                Some(path) => std::fs::write(
+                    path,
+                    json + "
+",
+                )
+                .with_context(|| format!("failed to write {}", path.display()))?,
+                None => println!("{json}"),
+            }
+            let c = &reach.coverage;
+            eprintln!(
+                "reached {}/{} files, {}/{} packages ({} partially)",
+                c.reached_files,
+                c.total_files,
+                c.reached_packages,
+                c.total_packages,
+                c.partially_reached_packages.len()
+            );
+        }
         Commands::Slim { .. } => not_implemented("slim")?,
         Commands::Attest { .. } => not_implemented("attest")?,
         Commands::Report { .. } => not_implemented("report")?,

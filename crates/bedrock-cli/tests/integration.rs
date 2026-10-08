@@ -139,7 +139,7 @@ fn inspect_rejects_directory_without_oci_layout_marker() {
 
 #[test]
 fn not_implemented_commands_exit_4() {
-    Command::cargo_bin("bedrock").unwrap().args(["trace", "whatever"]).assert().failure().code(4);
+    Command::cargo_bin("bedrock").unwrap().args(["slim", "whatever"]).assert().failure().code(4);
 }
 
 #[test]
@@ -313,4 +313,76 @@ fn scan_reports_backport_aware_findings_and_gates_with_fail_on() {
     assert_eq!(sarif["version"], "2.1.0");
     assert_eq!(sarif["runs"][0]["results"].as_array().unwrap().len(), 2);
     assert_eq!(sarif["runs"][0]["results"][0]["level"], "error");
+}
+
+/// Traces a tiny image built from the host's own dash and libc, so the test
+/// needs no network or registry. Skips where ptrace or user namespaces are
+/// unavailable (exit 4), e.g. a locked-down CI container.
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[test]
+fn trace_records_opened_files_and_the_static_closure() {
+    let host = |p: &str| std::fs::read(p).ok();
+    let (Some(dash), Some(libc)) = (host("/bin/dash"), host("/lib/x86_64-linux-gnu/libc.so.6"))
+    else {
+        eprintln!("skipping: host lacks /bin/dash and x86-64 glibc");
+        return;
+    };
+    let Some(ld) = host("/lib64/ld-linux-x86-64.so.2") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let builder = LayoutBuilder::new(dir.path());
+    let layer = builder.layer_with_modes(&[
+        ("bin/dash", &dash, 0o755),
+        ("lib/x86_64-linux-gnu/libc.so.6", &libc, 0o755),
+        ("lib64/ld-linux-x86-64.so.2", &ld, 0o755),
+        ("etc/used.conf", b"echo from-config\n", 0o644),
+        ("etc/unused.conf", b"never read\n", 0o644),
+    ]);
+    builder.finish_with_config(
+        &[layer],
+        br#"{"architecture":"amd64","os":"linux","config":{"Entrypoint":["/bin/dash","-c",". /etc/used.conf"]}}"#,
+    );
+
+    let out = Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["trace", "--workload-duration", "5s", "--platform", "linux/amd64"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    if out.status.code() == Some(4) {
+        eprintln!("skipping: {}", String::from_utf8_lossy(&out.stderr));
+        return;
+    }
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let reach: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let paths: Vec<&str> =
+        reach["paths"].as_array().unwrap().iter().map(|p| p["path"].as_str().unwrap()).collect();
+    let origin = |p: &str| {
+        reach["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["path"] == p)
+            .map(|e| e["origin"].as_str().unwrap().to_string())
+    };
+
+    assert_eq!(origin("/etc/used.conf").as_deref(), Some("dynamic"));
+    assert!(!paths.contains(&"/etc/unused.conf"), "{paths:?}");
+    assert!(origin("/bin/dash").is_some());
+    // The loader is named by PT_INTERP and libc by DT_NEEDED: found statically
+    // even when the kernel, not the process, did the mapping.
+    assert!(origin("/lib64/ld-linux-x86-64.so.2").is_some(), "{paths:?}");
+    assert!(origin("/lib/x86_64-linux-gnu/libc.so.6").is_some(), "{paths:?}");
+    assert_eq!(reach["workload"]["entrypoint_code"], 0);
+    assert_eq!(reach["workload"]["stopped_by_bedrock"], false);
+}
+
+#[test]
+fn trace_without_a_workload_is_a_usage_error() {
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["trace", "whatever"])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("exactly one of --workload"));
 }
