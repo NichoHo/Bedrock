@@ -111,5 +111,5 @@ Finding counts need an advisory snapshot (`bedrock db update`); without one,
 | 0 | Pruned image written and verified (or `--no-verify`) |
 | 1 | Error, including a trace that looks incomplete |
 | 2 | Verification failed; nothing written |
-| 3 | Usage error (workload flags) |
+| 3 | Usage error (bad arguments or workload flags) |
 | 4 | Environment: no ptrace or user namespaces, unsupported host |

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Bedrock is in early development (Phase 0/1) and has no stable release yet.
+Bedrock is in early development and has no stable release yet.
 Only the latest commit on `main` is supported.
 
 ## Reporting a vulnerability
@@ -19,6 +19,13 @@ parser crashes, path escapes and terminal-escape injection are in scope.
 
 ## Release signing identity
 
-Release signing is planned for Phase 5 and is not implemented yet. Until then,
-release binaries carry only a SHA-256 checksum file. That proves the download
-is intact, not who built it.
+Bedrock can sign and attest images with `bedrock attest` (key-based). Its own
+releases are not signed yet. Until they are, release binaries carry only a
+SHA-256 checksum file. That proves the download is intact, not who built it.
+
+## What the tracing sandbox is not
+
+`bedrock trace` and `bedrock slim` run an image's entrypoint under `ptrace` in a
+chroot and mount namespace. That isolates the filesystem and credentials only.
+Network, process and IPC namespaces are shared with the host, so it is not a
+security boundary. Run them on a throwaway host for images you do not trust.

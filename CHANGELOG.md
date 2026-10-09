@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CONTRIBUTING.md`.
 
 ### Changed
+- Bad command-line arguments now exit 3 (usage error) instead of clap's 2, which means "verification failed" here.
 - Pruned layers use maximum gzip compression.
 - The snap is classic-confined: trace and slim need ptrace and a chroot.
 - `--platform` defaults to the host architecture (was `linux/amd64`).

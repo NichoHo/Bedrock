@@ -780,3 +780,17 @@ fn version_flag_prints_the_crate_version() {
         .success()
         .stdout(predicate::str::starts_with(concat!("bedrock ", env!("CARGO_PKG_VERSION"))));
 }
+
+#[test]
+fn bad_arguments_exit_3_and_help_exits_0() {
+    // 2 is reserved for "verification failed", so argument errors are 3.
+    Command::cargo_bin("bedrock").unwrap().arg("scan").assert().failure().code(3);
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["scan", "x", "--fail-on", "bogus"])
+        .assert()
+        .failure()
+        .code(3);
+    Command::cargo_bin("bedrock").unwrap().arg("--help").assert().success();
+    Command::cargo_bin("bedrock").unwrap().args(["slim", "--help"]).assert().success();
+}

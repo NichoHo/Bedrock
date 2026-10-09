@@ -448,7 +448,13 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    // clap exits 2 on bad arguments, but 2 means "verification failed" here
+    // (BEDROCK_SPEC.md 7.4): bad arguments are a usage error, exit 3.
+    let cli = Cli::try_parse().unwrap_or_else(|e| {
+        let usage_error = e.use_stderr();
+        let _ = e.print();
+        std::process::exit(if usage_error { 3 } else { 0 })
+    });
 
     match &cli.command {
         Commands::Inspect { image, platform, limits } => {
