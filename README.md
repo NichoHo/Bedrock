@@ -60,7 +60,7 @@ stylesheet, and severity drawn as a shape as well as a colour.
 
 ## Results
 
-On a corpus of 18 public images, each with a workload, `bedrock slim` produced a verified image for all 18, from -1% to -90% smaller (typically 60%+ for Debian and Python based images). See [docs/corpus.md](docs/corpus.md) for the table and what it does and does not prove.
+On a corpus of 21 public images, each with a workload, `bedrock slim` produced a verified image for all 21, from -1% to -90% smaller (typically 60%+ for Debian and Python based images). See [docs/corpus.md](docs/corpus.md) for the table and what it does and does not prove.
 
 ## Build and run
 

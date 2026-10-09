@@ -345,12 +345,25 @@ fn package_db_overrides(
             }
         }
     }
-    if plan
-        .removed_packages
-        .iter()
-        .any(|(n, _)| req.packages.iter().any(|p| p.name == *n && p.purl.starts_with("pkg:rpm/")))
-    {
-        notes.push("rpm packages were removed from disk but the rpm database was not rewritten: the pruned image's SBOM still lists them".into());
+    let rpm = removed_of("pkg:rpm/");
+    if !rpm.is_empty() {
+        let mut rewritten = false;
+        for path in ["usr/lib/sysimage/rpm/rpmdb.sqlite", "var/lib/rpm/rpmdb.sqlite"] {
+            let Some(db) = read_file(req.inventory, &resolver, path)? else { continue };
+            let wal_path = format!("{path}-wal");
+            let wal = read_file(req.inventory, &resolver, &wal_path)?;
+            let new = crate::sbom::rpm::sqlite_without(&db, wal.as_deref(), &rpm)
+                .with_context(|| format!("failed to rewrite {path}"))?;
+            out.insert(PathBuf::from(path), new);
+            if wal.is_some() {
+                // The log is folded into the new file; a stale one must not replay over it.
+                out.insert(PathBuf::from(wal_path), Vec::new());
+            }
+            rewritten = true;
+        }
+        if !rewritten {
+            notes.push("rpm packages were removed from disk but this image's rpm database is not SQLite (Berkeley DB or NDB) and was not rewritten: its SBOM still lists them".into());
+        }
     }
     Ok(out)
 }

@@ -59,9 +59,11 @@ list: keep it with the keep-list if your program needs it.
 
 Removing a package's files without editing the database would leave `dpkg -l`
 and every scanner reporting it. So `slim` rewrites dpkg `status` (and drops the
-package's `info/` files) and apk `installed`. **The rpm database is not
-rewritten**: on rpm-based images the pruned image's SBOM still lists removed
-packages, and the report says so.
+package's `info/` files), apk `installed`, and the SQLite rpm database
+(`rpmdb.sqlite`: Fedora, RHEL, Rocky and Alma 9, Amazon Linux 2023), deleting each
+removed package's row and its index rows the way `rpm -e --justdb` would.
+**Berkeley DB and NDB rpm databases** (RHEL 7 and 8, openSUSE) are not rewritten:
+on those images the pruned SBOM still lists removed packages, and the report says so.
 
 ## Output
 

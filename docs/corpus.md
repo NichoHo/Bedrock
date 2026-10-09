@@ -1,6 +1,6 @@
 # Corpus results
 
-18 of 18 images pass: `bedrock slim` exits 0 and the pruned image verifies (same exit status, same HTTP status and body digest as the original, under the same workload).
+21 of 21 images pass: `bedrock slim` exits 0 and the pruned image verifies (same exit status, same HTTP status and body digest as the original, under the same workload).
 
 | Entry | Image | Result | Size MB | Change | Packages | Findings | Files reached | Notes |
 |---|---|---|---:|---:|---:|---:|---:|---|
@@ -22,6 +22,9 @@
 | ruby-alpine | `ruby:3.3-alpine` | **PASS** | 37.6 to 17.1 | -54.4% | 21 to 9 | 1 to 1 | 130/2612 |  |
 | php-cli-alpine | `php:8-cli-alpine` | **PASS** | 42.6 to 13.9 | -67.5% | 41 to 28 | 2 to 2 | 29/818 |  |
 | golang-version | `golang:1.23-alpine` | **PASS** | 74.5 to 7.6 | -89.8% | 18 to 7 | 152 to 94 | 2/13512 |  |
+| fedora-rpm | `fedora:latest` | **PASS** | 66.2 to 22.9 | -65.4% | 146 to 31 | 0 to 0 | 44/4902 |  |
+| rocky9-rpm | `rockylinux:9` | **PASS** | 61.3 to 12.0 | -80.4% | 144 to 32 | 482 to 129 | 39/6199 |  |
+| al2023-rpm | `amazonlinux:2023` | **PASS** | 52.1 to 14.7 | -71.9% | 108 to 30 | 0 to 0 | 38/6481 |  |
 
 ## How this was measured
 
@@ -36,4 +39,5 @@
 - **Entries with `duration` workloads capture startup and idle behaviour only.** The HTTP entries exercise one request.
 - **Small images shrink little.** Alpine, busybox and memcached have little to remove; static single-binary images such as `traefik/whoami` have nothing but the binary.
 - **`node:22-alpine` and `caddy:alpine` keep most of their size** because the runtime binary is most of the image.
+- **rpm images are rewritten, not just emptied.** On Fedora, Rocky 9 and Amazon Linux 2023 `slim` edits the SQLite rpm database, and `rpm -qa` inside each pruned image lists only the packages that remain (checked: 32, 32 and 31 entries, down from 147, 141 and 106).
 - **Compiled-in modules count as packages** (`caddy:alpine` goes from 180 to 157 "packages", most of them Go modules in one binary). They are pruned per file, never as a group.

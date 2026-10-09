@@ -120,3 +120,23 @@ name = "golang-version"
 image = "golang:1.23-alpine"
 duration = "30s"
 cmd = ["go", "version"]
+
+# rpm-based images: slim rewrites their SQLite rpm database, so `rpm -qa` in the
+# pruned image lists only what remains.
+[[image]]
+name = "fedora-rpm"
+image = "fedora:latest"
+duration = "30s"
+cmd = ["sh", "-c", "rpm -qa | wc -l"]
+
+[[image]]
+name = "rocky9-rpm"
+image = "rockylinux:9"
+duration = "30s"
+cmd = ["sh", "-c", "rpm -qa | wc -l"]
+
+[[image]]
+name = "al2023-rpm"
+image = "amazonlinux:2023"
+duration = "30s"
+cmd = ["sh", "-c", "rpm -qa | wc -l"]

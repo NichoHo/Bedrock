@@ -10,6 +10,7 @@
 use crate::fs::FileInventory;
 use crate::sbom::{read_file, OsRelease, Package};
 use anyhow::{bail, ensure, Context, Result};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Where the database lives across distros. `var/lib/rpm` is a symlink to
@@ -230,6 +231,69 @@ fn sqlite_blobs(db: &[u8], wal: Option<&[u8]>) -> Result<Vec<Vec<u8>>> {
     })();
     let _ = std::fs::remove_dir_all(&dir);
     result
+}
+
+/// Rewrites an SQLite rpm database without the named packages, as
+/// `rpm -e --justdb` would: the row in `Packages` and every index row for the
+/// same `hnum` go. Any write-ahead log is folded in first, so the result is a
+/// single self-contained file and the image's `-wal` can be emptied.
+pub fn sqlite_without(db: &[u8], wal: Option<&[u8]>, removed: &BTreeSet<&str>) -> Result<Vec<u8>> {
+    ensure!(db.starts_with(b"SQLite format 3\0"), "not an SQLite rpm database");
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("rpmdb.sqlite");
+    std::fs::write(&path, db)?;
+    if let Some(wal) = wal {
+        std::fs::write(dir.path().join("rpmdb.sqlite-wal"), wal)?;
+    }
+    let conn = rusqlite::Connection::open(&path)?;
+
+    let mut gone = Vec::new();
+    {
+        let mut stmt = conn.prepare("SELECT hnum, blob FROM Packages")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+        for row in rows {
+            let (hnum, blob) = row?;
+            let header = Header::parse(&blob).context("malformed rpm header")?;
+            if header.string(TAG_NAME)?.is_some_and(|n| removed.contains(n.as_str())) {
+                gone.push(hnum);
+            }
+        }
+    }
+    // Every table keyed by `hnum` (Packages and its index tables). Names come
+    // from an untrusted file, so only plain identifiers are used.
+    let tables: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )?;
+        let names = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        names.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    // rpm's index tables carry `FOREIGN KEY (hnum) REFERENCES Packages`, so the
+    // `Packages` row has to be deleted after the rows that point at it.
+    let mut ordered: Vec<&String> = tables
+        .iter()
+        .filter(|t| t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        .collect();
+    ordered.sort_by_key(|t| t.as_str() == "Packages");
+    for table in ordered {
+        let has_hnum = conn
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .any(|c| c == "hnum");
+        if has_hnum {
+            let mut del = conn.prepare(&format!("DELETE FROM \"{table}\" WHERE hnum = ?1"))?;
+            for h in &gone {
+                del.execute([h])?;
+            }
+        }
+    }
+    // Fold the log into the main file and leave no journal behind.
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    conn.query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))?;
+    conn.execute_batch("VACUUM")?;
+    drop(conn);
+    Ok(std::fs::read(&path)?)
 }
 
 // ------------------------------------------------------------------------ NDB
@@ -524,5 +588,85 @@ mod tests {
         drop(conn);
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(sqlite_blobs(&bytes, None).unwrap(), vec![bash_header()]);
+    }
+
+    fn curl_header() -> Vec<u8> {
+        header(&[
+            (TAG_NAME, TYPE_STRING, 1, b"curl\0"),
+            (TAG_VERSION, TYPE_STRING, 1, b"8.6.0\0"),
+            (TAG_RELEASE, TYPE_STRING, 1, b"1.fc40\0"),
+            (TAG_ARCH, TYPE_STRING, 1, b"x86_64\0"),
+        ])
+    }
+
+    /// A database shaped like rpm's: `Packages` plus index tables keyed by `hnum`.
+    fn rpmdb() -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rpmdb.sqlite");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "CREATE TABLE Packages (hnum INTEGER PRIMARY KEY AUTOINCREMENT, blob BLOB NOT NULL)",
+            [],
+        )
+        .unwrap();
+        for t in ["Name", "Basenames", "Installtid"] {
+            conn.execute(
+                // Like the real index tables: deleting a Packages row first would violate this.
+                &format!(
+                    "CREATE TABLE {t} (key BLOB, hnum INTEGER NOT NULL, idx INTEGER, \
+                     FOREIGN KEY (hnum) REFERENCES Packages(hnum))"
+                ),
+                [],
+            )
+            .unwrap();
+        }
+        conn.execute("CREATE TABLE Meta (k TEXT, v TEXT)", []).unwrap();
+        conn.execute("INSERT INTO Meta VALUES ('keep', 'me')", []).unwrap();
+        for (h, name) in [(bash_header(), "bash"), (curl_header(), "curl")] {
+            conn.execute("INSERT INTO Packages (blob) VALUES (?1)", [h]).unwrap();
+            let hnum = conn.last_insert_rowid();
+            for t in ["Name", "Basenames", "Installtid"] {
+                conn.execute(
+                    &format!("INSERT INTO {t} VALUES (?1, ?2, 0)"),
+                    rusqlite::params![name, hnum],
+                )
+                .unwrap();
+            }
+        }
+        drop(conn);
+        std::fs::read(&path).unwrap()
+    }
+
+    fn names_in(db: &[u8], wal: Option<&[u8]>) -> Vec<String> {
+        let os = OsRelease::default();
+        parse_db(db, wal, &os).unwrap().into_iter().map(|p| p.name).collect()
+    }
+
+    #[test]
+    fn removed_packages_leave_no_row_in_any_hnum_table() {
+        let db = rpmdb();
+        let out = sqlite_without(&db, None, &BTreeSet::from(["bash"])).unwrap();
+        assert_eq!(names_in(&out, None), ["curl"]);
+
+        // Inspect the result directly: no index row for the removed package either.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rpmdb.sqlite");
+        std::fs::write(&path, &out).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for t in ["Packages", "Name", "Basenames", "Installtid"] {
+            let n: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 1, "{t}");
+        }
+        let meta: String = conn.query_row("SELECT v FROM Meta", [], |r| r.get(0)).unwrap();
+        assert_eq!(meta, "me", "tables without hnum are untouched");
+    }
+
+    #[test]
+    fn nothing_removed_keeps_every_package_and_other_input_is_rejected() {
+        let db = rpmdb();
+        let out = sqlite_without(&db, None, &BTreeSet::new()).unwrap();
+        assert_eq!(names_in(&out, None), ["bash", "curl"]);
+        assert!(sqlite_without(b"RpmP not sqlite", None, &BTreeSet::new()).is_err());
     }
 }
