@@ -1,4 +1,5 @@
 pub mod apk;
+pub mod binaries;
 pub mod cyclonedx;
 pub mod dpkg;
 pub mod node;

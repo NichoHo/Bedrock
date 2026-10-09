@@ -30,12 +30,13 @@ pub fn parse_all_packages(
     resolver: impl Fn(&str) -> Option<PathBuf> + Copy,
 ) -> Vec<Package> {
     type Parser<F> = fn(&FileInventory, F) -> Result<Vec<Package>>;
-    let parsers: [(&str, Parser<_>); 5] = [
+    let parsers: [(&str, Parser<_>); 6] = [
         ("dpkg database", sbom::dpkg::parse_dpkg),
         ("apk database", sbom::apk::parse_apk),
         ("rpm database", sbom::rpm::parse_rpm),
         ("node_modules", sbom::node::parse_node),
         ("Python packages", sbom::python::parse_python),
+        ("Go and Rust binaries", sbom::binaries::parse_binaries),
     ];
     let mut packages = Vec::new();
     for (what, parse) in parsers {

@@ -203,6 +203,8 @@ fn target(pkg: &Package) -> std::result::Result<Target<'_>, String> {
     let (ecosystem, scheme, names) = match ty {
         "npm" => ("npm".to_string(), Scheme::Semver, vec![pkg.name.clone()]),
         "pypi" => ("PyPI".to_string(), Scheme::Pep440, vec![normalise("PyPI", &pkg.name)]),
+        "golang" => ("Go".to_string(), Scheme::Semver, vec![pkg.name.clone()]),
+        "cargo" => ("crates.io".to_string(), Scheme::Semver, vec![pkg.name.clone()]),
         "deb" | "apk" | "rpm" => {
             let Some((id, ver)) = distro else {
                 return Err(format!("{ty} packages with no distro release in os-release"));

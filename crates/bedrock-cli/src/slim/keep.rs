@@ -120,6 +120,12 @@ pub struct Plan {
     pub retained_unreached: Vec<(String, &'static str)>,
 }
 
+/// Packages read out of a compiled binary's metadata (Go modules, Rust crates)
+/// rather than a package database.
+fn is_compiled_in(pkg: &Package) -> bool {
+    pkg.purl.starts_with("pkg:golang/") || pkg.purl.starts_with("pkg:cargo/")
+}
+
 fn is_doc(p: &Path) -> bool {
     ["usr/share/doc", "usr/share/man", "usr/share/info", "usr/share/lintian"]
         .iter()
@@ -228,7 +234,9 @@ pub fn plan(input: &PlanInput<'_>) -> Plan {
     keep.extend(mandatory_hits.iter().map(|p| p.to_path_buf()));
     if input.granularity == Granularity::Package {
         for (pkg, r) in input.packages.iter().zip(&retained) {
-            if *r {
+            // Modules compiled into a binary are not separable packages: one
+            // module ("stdlib") spans every Go binary. Keep only what was reached.
+            if *r && !is_compiled_in(pkg) {
                 keep.extend(pkg.files.iter().filter(|f| inv.contains_key(*f)).cloned());
             }
         }
@@ -455,6 +463,31 @@ mod tests {
         assert!(p.keep.contains(Path::new("lib/libz.so.1.2")), "symlink target");
         assert!(p.keep.contains(Path::new("opt/a")), "hard link original");
         assert!(!p.keep.contains(Path::new("opt/other")));
+    }
+
+    #[test]
+    fn compiled_in_packages_are_pruned_per_file_even_at_package_granularity() {
+        let f = EntryKind::File;
+        let inv = inventory(&[
+            ("usr/local/go/bin/go", f.clone()),
+            ("usr/local/go/pkg/tool/compile", f.clone()),
+        ]);
+        let mut stdlib = pkg("stdlib", &["usr/local/go/bin/go", "usr/local/go/pkg/tool/compile"]);
+        stdlib.purl = "pkg:golang/stdlib@1.23.4".into();
+        let reached = set(&["usr/local/go/bin/go"]);
+        let kl = KeepList::default();
+        let p = plan(&PlanInput {
+            inventory: &inv,
+            packages: &[stdlib],
+            reached: &reached,
+            dynamic: &reached,
+            keep_list: &kl,
+            mandatory: false,
+            granularity: Granularity::Package,
+        });
+        assert!(p.keep.contains(Path::new("usr/local/go/bin/go")));
+        assert!(!p.keep.contains(Path::new("usr/local/go/pkg/tool/compile")));
+        assert!(p.removed_packages.is_empty(), "stdlib is still needed by the reached binary");
     }
 
     #[test]
