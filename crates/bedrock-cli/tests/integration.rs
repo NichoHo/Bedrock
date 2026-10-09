@@ -382,10 +382,16 @@ fn trace_without_a_workload_is_a_usage_error() {
         .stderr(predicate::str::contains("exactly one of --workload"));
 }
 
-/// An image built from the host's dash and glibc: reads `/etc/used.conf`, and
-/// also ships files the entrypoint never touches. `None` where the host lacks them.
+/// An image built from the host's dash and glibc: by default it reads
+/// `/etc/used.conf`, and it also ships files the entrypoint never touches
+/// (including mandatory-list files). `None` where the host lacks them.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn dash_image(dir: &std::path::Path) -> Option<()> {
+    dash_image_running(dir, ". /etc/used.conf")
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn dash_image_running(dir: &std::path::Path, script: &str) -> Option<()> {
     let dash = std::fs::read("/bin/dash").ok()?;
     let libc = std::fs::read("/lib/x86_64-linux-gnu/libc.so.6").ok()?;
     let ld = std::fs::read("/lib64/ld-linux-x86-64.so.2").ok()?;
@@ -396,13 +402,41 @@ fn dash_image(dir: &std::path::Path) -> Option<()> {
         ("lib64/ld-linux-x86-64.so.2", &ld, 0o755),
         ("etc/used.conf", b"echo from-config\n", 0o644),
         ("etc/unused.conf", b"never read\n", 0o644),
+        ("etc/passwd", b"root:x:0:0::/root:/bin/sh\n", 0o644),
+        ("etc/group", b"root:x:0:\n", 0o644),
+        ("etc/nsswitch.conf", b"hosts: files dns\n", 0o644),
         ("opt/junk/big.bin", &[7u8; 4096], 0o644),
     ]);
-    builder.finish_with_config(
-        &[layer],
-        br#"{"architecture":"amd64","os":"linux","config":{"Entrypoint":["/bin/dash","-c",". /etc/used.conf"]}}"#,
-    );
+    let config = serde_json::json!({
+        "architecture": "amd64", "os": "linux",
+        "config": { "Entrypoint": ["/bin/dash", "-c", script] }
+    });
+    builder.finish_with_config(&[layer], config.to_string().as_bytes());
     Some(())
+}
+
+/// Paths in the layers of a pruned OCI layout.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn layout_paths(layout: &std::path::Path) -> Vec<String> {
+    use std::io::Read;
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(layout.join("index.json")).unwrap()).unwrap();
+    let blob = |d: &str| {
+        std::fs::read(layout.join("blobs/sha256").join(d.trim_start_matches("sha256:"))).unwrap()
+    };
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&blob(index["manifests"][0]["digest"].as_str().unwrap())).unwrap();
+    let mut paths = Vec::new();
+    for l in manifest["layers"].as_array().unwrap() {
+        let mut tar = Vec::new();
+        flate2::read::GzDecoder::new(&blob(l["digest"].as_str().unwrap())[..])
+            .read_to_end(&mut tar)
+            .unwrap();
+        for e in tar::Archive::new(&tar[..]).entries().unwrap() {
+            paths.push(e.unwrap().path().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    paths
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -580,4 +614,159 @@ fn report_re_renders_a_saved_scan_report_in_every_format() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("not a Bedrock report"));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn slim_cmd(img: &std::path::Path, out: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .args([
+            "slim",
+            "--workload-duration",
+            "5s",
+            "--platform",
+            "linux/amd64",
+            "--format",
+            "json",
+            "-o",
+        ])
+        .arg(out)
+        .args(extra)
+        .arg(img)
+        .output()
+        .unwrap()
+}
+
+/// Invariant 1 (verify gate) and 5 (nothing emitted on failure): drop a file the
+/// workload reads from the keep set, and the verify step must fail, name that
+/// file, exit 2 and leave no output behind.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn invariant_verify_gate_fails_naming_the_missing_file_and_emits_nothing() {
+    let img = tempfile::tempdir().unwrap();
+    if dash_image(img.path()).is_none() {
+        return;
+    }
+    let out = tempfile::tempdir().unwrap();
+    let dest = out.path().join("pruned");
+    let run = slim_cmd(img.path(), &dest, &["--debug-drop", "/etc/used.conf"]);
+    if run.status.code() == Some(4) {
+        return; // no ptrace here
+    }
+    assert_eq!(run.status.code(), Some(2), "{}", String::from_utf8_lossy(&run.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(report["verify"]["status"], "fail");
+    let missed: Vec<&str> = report["verify"]["missed_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert!(missed.contains(&"/etc/used.conf"), "{missed:?}");
+    assert!(!dest.exists(), "a failed verify must leave no output");
+}
+
+/// Invariants 3 (evidence completeness) and 4 (mandatory paths).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn invariant_every_removal_has_a_documented_reason_and_mandatory_paths_survive() {
+    let img = tempfile::tempdir().unwrap();
+    if dash_image(img.path()).is_none() {
+        return;
+    }
+    let out = tempfile::tempdir().unwrap();
+    let kept = out.path().join("kept");
+    let run = slim_cmd(img.path(), &kept, &[]);
+    if run.status.code() == Some(4) {
+        return;
+    }
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+    for r in report["removals"].as_array().unwrap() {
+        let reason = r["reason"].as_str().unwrap();
+        assert!(
+            ["no_file_reached", "only_docs_reached", "not_in_closure"].contains(&reason),
+            "{r}"
+        );
+    }
+    let paths = layout_paths(&kept);
+    for mandatory in ["etc/passwd", "etc/group", "etc/nsswitch.conf"] {
+        assert!(paths.contains(&mandatory.to_string()), "{mandatory} missing from {paths:?}");
+    }
+    assert!(!paths.contains(&"etc/unused.conf".to_string()));
+
+    // --no-mandatory really turns the list off.
+    let bare = out.path().join("bare");
+    let run = slim_cmd(img.path(), &bare, &["--no-mandatory"]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(!layout_paths(&bare).contains(&"etc/passwd".to_string()));
+}
+
+/// Chaos: the entrypoint is killed mid-run. The trace is partial, so slim must
+/// refuse to prune from it unless told otherwise.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn chaos_a_killed_entrypoint_is_a_partial_trace() {
+    let img = tempfile::tempdir().unwrap();
+    if dash_image_running(img.path(), "kill -9 $$").is_none() {
+        return;
+    }
+    let out = tempfile::tempdir().unwrap();
+    let refused = slim_cmd(img.path(), &out.path().join("a"), &[]);
+    if refused.status.code() == Some(4) {
+        return;
+    }
+    assert_eq!(refused.status.code(), Some(1), "{}", String::from_utf8_lossy(&refused.stderr));
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("incomplete") && err.contains("--allow-partial-trace"), "{err}");
+    assert!(!out.path().join("a").exists());
+
+    let allowed = slim_cmd(img.path(), &out.path().join("b"), &["--allow-partial-trace"]);
+    assert!(allowed.status.success(), "{}", String::from_utf8_lossy(&allowed.stderr));
+}
+
+/// Chaos: a truncated snapshot file must stop `scan` with a clear error, not
+/// produce findings from half a database.
+#[test]
+fn chaos_a_truncated_snapshot_refuses_to_scan() {
+    let (img, db) = scan_fixture();
+    let data = std::fs::read_dir(db.path())
+        .unwrap()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("debian-"))
+        .unwrap()
+        .path();
+    let bytes = std::fs::read(&data).unwrap();
+    std::fs::write(&data, &bytes[..bytes.len() / 2]).unwrap();
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .env("BEDROCK_DB_DIR", db.path())
+        .arg("scan")
+        .arg(img.path())
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains("digest check"));
+}
+
+/// Invariant 6: with machine-readable output, stdout is that document and nothing else.
+#[test]
+fn invariant_stdout_is_pure_json_for_machine_formats() {
+    let (img, db) = scan_fixture();
+    let run = |args: &[&str]| {
+        let out = Command::cargo_bin("bedrock")
+            .unwrap()
+            .env("BEDROCK_DB_DIR", db.path())
+            .args(args)
+            .arg(img.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .unwrap_or_else(|e| panic!("{args:?} stdout is not a single JSON document: {e}"));
+    };
+    run(&["scan", "--format", "json"]);
+    run(&["scan", "--format", "sarif"]);
+    run(&["sbom", "--format", "spdx"]);
+    run(&["sbom", "--format", "cyclonedx"]);
 }

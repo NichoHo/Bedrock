@@ -47,6 +47,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `SECURITY.md` now gives a private reporting route.
 
 ### Fixed
+- `slim` treated an entrypoint killed by a signal as a complete trace; it is now partial, like a non-zero exit.
 - CI also runs on `main`, not only `master`.
 - apk packages are found in merged-`/usr` images (Wolfi, Chainguard), where
   the database is at `usr/lib/apk/db/installed`. Before, these images

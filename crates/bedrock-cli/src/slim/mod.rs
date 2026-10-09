@@ -40,6 +40,9 @@ pub struct SlimRequest<'a> {
     pub mandatory: bool,
     pub allow_partial_trace: bool,
     pub verify: bool,
+    /// Paths removed from the keep set after planning. A test hook: the
+    /// verify-gate invariant corrupts the keep set with it and expects failure.
+    pub debug_drop: Vec<PathBuf>,
     /// Where the pruned OCI layout is written. Must not exist or be empty.
     pub output: PathBuf,
     pub db: Option<&'a VulnerabilityDb>,
@@ -65,6 +68,13 @@ fn partial_reason(reach: &ReachSet) -> Option<String> {
     }
     if !w.stopped_by_bedrock && w.entrypoint_code.is_some_and(|c| c != 0) {
         return Some(format!("the entrypoint exited with code {}", w.entrypoint_code.unwrap_or(0)));
+    }
+    // Killed by a signal we did not send: it crashed or was killed mid-run.
+    if !w.stopped_by_bedrock && w.entrypoint_signal.is_some() {
+        return Some(format!(
+            "the entrypoint was killed by signal {}",
+            w.entrypoint_signal.unwrap_or(0)
+        ));
     }
     if w.script_exit.is_some_and(|c| c != 0) {
         return Some(format!(
@@ -130,6 +140,11 @@ pub fn run(req: SlimRequest<'_>) -> Result<SlimResult> {
         mandatory: req.mandatory,
         granularity: req.granularity,
     });
+
+    let mut plan = plan;
+    for p in &req.debug_drop {
+        plan.keep.remove(p);
+    }
 
     // 3. Package databases lose the packages that were removed.
     let mut notes = Vec::new();

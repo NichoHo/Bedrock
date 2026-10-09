@@ -103,6 +103,9 @@ enum Commands {
         /// Skip the verification run (not recommended)
         #[arg(long)]
         no_verify: bool,
+        /// Test hook: drop these image paths from the keep set after planning
+        #[arg(long, hide = true)]
+        debug_drop: Vec<PathBuf>,
         /// Write the JSON report to this file
         #[arg(long)]
         report: Option<PathBuf>,
@@ -689,6 +692,7 @@ fn run() -> Result<()> {
             no_mandatory,
             allow_partial_trace,
             no_verify,
+            debug_drop,
             report: report_path,
             format,
             platform,
@@ -751,6 +755,10 @@ fn run() -> Result<()> {
                 mandatory: !no_mandatory,
                 allow_partial_trace: *allow_partial_trace,
                 verify: !no_verify,
+                debug_drop: debug_drop
+                    .iter()
+                    .map(|p| p.strip_prefix("/").unwrap_or(p).to_path_buf())
+                    .collect(),
                 output: output.clone(),
                 db: db.as_ref(),
                 limits: limits.limits(),

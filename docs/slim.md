@@ -90,7 +90,7 @@ find, and exits 2. A response body that legitimately changes between runs
 stable endpoints.
 
 Pruning refuses to start from a trace that looks incomplete (workload script
-failed, an HTTP request failed or returned 5xx, the entrypoint crashed, the run
+failed, an HTTP request failed or returned 5xx, the entrypoint crashed or was killed by a signal, the run
 timed out) unless you pass `--allow-partial-trace`.
 
 ## Report
