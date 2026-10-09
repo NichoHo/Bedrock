@@ -8,7 +8,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "bedrock")]
+#[command(name = "bedrock", version)]
 #[command(about = "Bedrock - container size reduction tool")]
 struct Cli {
     #[command(subcommand)]

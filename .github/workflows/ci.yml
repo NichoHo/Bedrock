@@ -38,6 +38,18 @@ jobs:
     - name: Test as root with ptrace
       run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --workspace --all-targets
 
+  # BEDROCK_SPEC.md 9.6: slim Bedrock's own release image and check that
+  # `bedrock --version` still prints the same string from the pruned image.
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Build
+      run: cargo build --release
+    - name: Slim Bedrock with Bedrock
+      run: sudo -E env "PATH=$PATH" "HOME=$HOME" ./scripts/self-test.sh
+
   # Licence and advisory checks on Bedrock's own dependencies (deny.toml).
   deny:
     runs-on: ubuntu-latest

@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `--version`, a release `Dockerfile`, and `scripts/self-test.sh` (run in CI): Bedrock slims its own image and checks `bedrock --version` still works from the pruned image.
 - `slim` rewrites the SQLite rpm database (Fedora, RHEL 9 family, Amazon Linux 2023) so the pruned image's `rpm -qa` and SBOM match what is left. Berkeley DB and NDB databases are still not rewritten.
 - `sbom` and `scan` read Go build info and `cargo auditable` dependency lists from executables, so compiled-in modules and the Go standard library are matched against OSV.
 - `docs/scan-comparison.md`: `scan` against grype on four images, with every disagreement explained.

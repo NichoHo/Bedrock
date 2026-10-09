@@ -1,0 +1,6 @@
+target
+.git
+corpus-out
+*.md
+!README.md
+snap

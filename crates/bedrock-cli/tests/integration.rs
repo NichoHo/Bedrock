@@ -770,3 +770,13 @@ fn invariant_stdout_is_pure_json_for_machine_formats() {
     run(&["sbom", "--format", "spdx"]);
     run(&["sbom", "--format", "cyclonedx"]);
 }
+
+#[test]
+fn version_flag_prints_the_crate_version() {
+    Command::cargo_bin("bedrock")
+        .unwrap()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(concat!("bedrock ", env!("CARGO_PKG_VERSION"))));
+}
