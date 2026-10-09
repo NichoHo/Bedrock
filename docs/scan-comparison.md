@@ -32,7 +32,7 @@ BEDROCK_SPEC.md Phase 2 asks that findings agree with a reference scanner within
 
 ## What was and was not detected in compiled binaries
 
-Go binaries built with Go 1.18 or later are read through their embedded build info (`golang.org/x/net`-style modules plus the toolchain as `stdlib`). Rust binaries are read only if built with `cargo auditable`; that path is covered by a unit test on the section format but has not been run against a real auditable binary. Go binaries before 1.18, and stripped or obfuscated binaries, are not detected.
+Go binaries built with Go 1.18 or later are read through their embedded build info (`golang.org/x/net`-style modules plus the toolchain as `stdlib`). Rust binaries are read only if built with `cargo auditable`. That path was run end to end on a real binary (a small crate depending on `serde_json` and `time` 0.1.45, built with cargo-auditable in a container): all 7 crates were read, and `scan` reported `CVE-2020-26235` in `time` 0.1.45 with fix 0.2.23. It was not compared against grype. Go binaries before 1.18, and stripped or obfuscated binaries, are not detected.
 
 ## Not compared
 
