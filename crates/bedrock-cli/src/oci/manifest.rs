@@ -27,6 +27,21 @@ pub struct Manifest {
     pub layers: Vec<Descriptor>,
 }
 
+/// True for an index entry that is a signature, SBOM or attestation attached to
+/// an image rather than an image. An `artifactType` alone does not say so:
+/// some registries (Chainguard) label real images with their config media type.
+pub fn is_attached_artifact(entry: &serde_json::Value) -> bool {
+    const IMAGE_CONFIG_TYPES: [&str; 2] = [
+        "application/vnd.oci.image.config.v1+json",
+        "application/vnd.docker.container.image.v1+json",
+    ];
+    entry
+        .get("artifactType")
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| !IMAGE_CONFIG_TYPES.contains(&t))
+        || entry.get("subject").is_some()
+}
+
 /// A manifest blob (or a local OCI layout's `index.json`) is either a single
 /// image manifest, or an index/manifest-list naming one manifest per platform.
 /// Both shapes are distinguished the same way: an index has "manifests" and no
@@ -41,7 +56,7 @@ fn parse_manifest_or_index(data: &[u8]) -> Result<ManifestOrIndex> {
     // Signatures, SBOMs and attestations attached to an image are listed in the
     // same index but are not images, whatever platform is asked for.
     if let Some(entries) = value.get_mut("manifests").and_then(|m| m.as_array_mut()) {
-        entries.retain(|m| m.get("artifactType").is_none());
+        entries.retain(|m| !is_attached_artifact(m));
     }
     if value.get("manifests").is_some() && value.get("config").is_none() {
         #[derive(Deserialize)]
@@ -133,6 +148,17 @@ pub fn resolve_manifest(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn images_labelled_with_their_config_type_are_still_images() {
+        // Chainguard's indexes label each real image this way.
+        let idx = br#"{"schemaVersion":2,"manifests":[
+          {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:aa","size":1,"artifactType":"application/vnd.oci.image.config.v1+json","platform":{"os":"linux","architecture":"amd64"}}]}"#;
+        match super::parse_manifest_or_index(idx).unwrap() {
+            super::ManifestOrIndex::Index(entries) => assert_eq!(entries.len(), 1),
+            _ => panic!("expected an index"),
+        }
+    }
+
     #[test]
     fn attached_artifacts_in_an_index_are_not_images() {
         let idx = br#"{"schemaVersion":2,"manifests":[

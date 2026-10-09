@@ -90,7 +90,7 @@ fn layout_subject(dir: &Path, os: &str, arch: &str) -> Result<Descriptor> {
         .as_array()
         .context("index.json has no manifests")?
         .iter()
-        .filter(|m| m.get("artifactType").is_none() && m.get("subject").is_none())
+        .filter(|m| !crate::oci::manifest::is_attached_artifact(m))
         .collect();
     let pick = match images.as_slice() {
         [one] => *one,
