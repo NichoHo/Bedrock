@@ -10,7 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `slim` rewrites the SQLite rpm database (Fedora, RHEL 9 family, Amazon Linux 2023) so the pruned image's `rpm -qa` and SBOM match what is left. Berkeley DB and NDB databases are still not rewritten.
 - `sbom` and `scan` read Go build info and `cargo auditable` dependency lists from executables, so compiled-in modules and the Go standard library are matched against OSV.
 - `docs/scan-comparison.md`: `scan` against grype on four images, with every disagreement explained.
-- A corpus of 18 public images with workloads (`corpus/`, `scripts/corpus.py`); all 18 verify
+- A corpus of 21 public images with workloads (`corpus/`, `scripts/corpus.py`); all 21 verify
   (`docs/corpus.md`). The weekly workflow runs it for real.
 - CI runs the suite as root so the ptrace tests execute instead of skipping.
 - `report`: re-render a saved report as Markdown, a self-contained HTML page, terminal text,

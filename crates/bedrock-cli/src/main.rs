@@ -433,6 +433,23 @@ fn check_platform(
     Ok(())
 }
 
+/// BEDROCK_SPEC.md 13: the sandbox should not need host root. `trace` and
+/// `slim` still work as root (the entrypoint drops to the image user), but a
+/// run that only needs unprivileged user namespaces is safer.
+#[cfg(unix)]
+fn warn_if_root() {
+    // SAFETY: geteuid cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!(
+            "warning: running as root. The sandbox is not a security boundary; run as an \
+             unprivileged user with user namespaces enabled if you can"
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_if_root() {}
+
 fn main() {
     if let Err(e) = run() {
         if e.downcast_ref::<EnvironmentError>().is_some()
@@ -630,6 +647,7 @@ fn run() -> Result<()> {
         Commands::Trace { image, workload: w, output, platform, limits, cmd } => {
             use bedrock::trace::workload::parse_duration;
             let (workload, readiness) = workload_from(w)?;
+            warn_if_root();
 
             let (os, arch) = parse_platform(platform)?;
             let cache = Cache::new().context("failed to initialize cache")?;
@@ -707,6 +725,7 @@ fn run() -> Result<()> {
         } => {
             use bedrock::trace::workload::parse_duration;
             let (workload, readiness) = workload_from(w)?;
+            warn_if_root();
             let keep_list_path = keep_list.clone();
             let keep_list = match keep_list {
                 Some(p) => bedrock::slim::keep::KeepList::parse(

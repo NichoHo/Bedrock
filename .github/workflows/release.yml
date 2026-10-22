@@ -6,7 +6,20 @@ on:
       - 'v*'
 
 jobs:
+  # BEDROCK_SPEC.md 9.6 / 11.2: slim Bedrock's own release image before any
+  # binary is published. A failure here stops the release.
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Slim Bedrock with Bedrock
+        run: sudo -E env "PATH=$PATH" "HOME=$HOME" ./scripts/self-test.sh
+
   build-and-release:
+    needs: self-test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -28,7 +41,7 @@ jobs:
       - name: Build
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Run tests (Self-test)
+      - name: Run tests
         run: cross test --release --target ${{ matrix.target }}
 
       # The three matrix jobs all produce a binary literally named `bedrock`;
