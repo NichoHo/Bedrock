@@ -1,0 +1,43 @@
+name: Bug report
+description: Something Bedrock did that it should not, or failed to do.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security problems here. Use the **Security** tab (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Bedrock version
+      description: Output of `bedrock --version`.
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: OS, architecture, and whether you run as root. For `trace` and `slim`, also the kernel version and whether user namespaces are enabled.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and image
+      description: The exact command, and the image (a public tag or digest is best).
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Output, the exit code, and the `slim` or `trace` report if there is one.
+    validations:
+      required: true

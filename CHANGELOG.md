@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Release workflow: a reproducible-build check, keyless cosign signing of every asset, a pruned release image pushed to ghcr.io and signed, and an SPDX SBOM of that image. Run by hand it is a dry run that publishes nothing.
+- A docs site (mdBook, built from `docs/`; CI checks that it builds), issue and pull request templates, and a section in `BEDROCK_SPEC.md` listing where the build differs from the plan.
 - `--version`, a release `Dockerfile`, and `scripts/self-test.sh` (run in CI): Bedrock slims its own image and checks `bedrock --version` still works from the pruned image.
 - `slim` rewrites the SQLite rpm database (Fedora, RHEL 9 family, Amazon Linux 2023) so the pruned image's `rpm -qa` and SBOM match what is left. Berkeley DB and NDB databases are still not rewritten.
 - `sbom` and `scan` read Go build info and `cargo auditable` dependency lists from executables, so compiled-in modules and the Go standard library are matched against OSV.

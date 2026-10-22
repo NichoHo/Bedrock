@@ -50,6 +50,17 @@ jobs:
     - name: Slim Bedrock with Bedrock
       run: sudo -E env "PATH=$PATH" "HOME=$HOME" ./scripts/self-test.sh
 
+  # BEDROCK_SPEC.md 14: the docs site (mdBook, built from docs/) must build.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: peaceiris/actions-mdbook@v2
+      with:
+        mdbook-version: '0.4.40'
+    - name: Build the docs site
+      run: mdbook build
+
   # Licence and advisory checks on Bedrock's own dependencies (deny.toml).
   deny:
     runs-on: ubuntu-latest

@@ -19,9 +19,26 @@ parser crashes, path escapes and terminal-escape injection are in scope.
 
 ## Release signing identity
 
-Bedrock can sign and attest images with `bedrock attest` (key-based). Its own
-releases are not signed yet. Until they are, release binaries carry only a
-SHA-256 checksum file. That proves the download is intact, not who built it.
+Bedrock can sign and attest images with `bedrock attest` (key-based).
+
+No release has been published yet. From the first tagged release, the release
+workflow signs every asset and the container image keylessly with cosign
+(Sigstore), and the signature is recorded in the Sigstore transparency log. The
+signing identity is the workflow on its tag:
+
+- identity: `https://github.com/NichoHo/Bedrock/.github/workflows/release.yml@refs/tags/vX.Y.Z`
+- issuer: `https://token.actions.githubusercontent.com`
+
+Each release asset has a `.sigstore.json` bundle next to it. To check one:
+
+```
+cosign verify-blob --bundle bedrock-x86_64-unknown-linux-musl.sigstore.json \
+  --certificate-identity "https://github.com/NichoHo/Bedrock/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  bedrock-x86_64-unknown-linux-musl
+```
+
+The `.sha256` files only prove a download is intact, not who built it.
 
 ## What the tracing sandbox is not
 

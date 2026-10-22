@@ -32,6 +32,7 @@ Sigstore, eBPF) is strongest in Rust. The risk is real and Section 12 accounts f
 12. [Phases](#12-phases)
 13. [Security and hardening](#13-security-and-hardening)
 14. [Documentation plan](#14-documentation-plan)
+15. [Where the build differs from this spec](#15-where-the-build-differs-from-this-spec)
 
 ---
 
@@ -907,3 +908,35 @@ predicates, and the write-up from Phase 6.
 
 Every documented command has its exact output committed as a fixture and tested
 in CI, so the docs cannot drift from the tool.
+
+---
+
+## 15. Where the build differs from this spec
+
+The spec is the plan. This section records, as of 2026-10-22, what the build does
+differently and why, so the plan stays honest. Each item is a decision, not an
+oversight, unless it says "not built".
+
+- **The sandbox shares the host network for script and HTTP workloads (13, Sandbox).**
+  The workload runs on the host and has to reach the entrypoint. A plain
+  `--workload-duration` run gets a private network namespace with only loopback.
+  Closing the gap needs the workload to run inside the sandbox's namespaces.
+- **The sandbox root filesystem is writable (13, Sandbox).** It is a throwaway copy.
+  A read-only root would make applications that write to their own directories at
+  startup fail under trace, and the trace would then not match a real run.
+- **Resource limits are `setrlimit` ceilings, not a cgroup (13, Sandbox).** Open
+  files, processes, data memory and CPU time. `RLIMIT_NPROC` counts all processes of
+  that user on the host.
+- **Keyless signing is not built into `bedrock attest` (5.8, Phase 5).** It cannot be
+  tested end to end without a real identity provider (see `docs/attest.md`). Release
+  assets and the release image are signed keylessly by the release workflow with
+  cosign instead, which satisfies 11.2 and 13.
+- **The snap is classic-confined, not strict (11.3).** `trace` and `slim` need
+  `ptrace` and a chroot. The snap is built in CI and not published to the store.
+- **No GitHub Action yet (11.3).** It needs a published release to download, and the
+  spec places it in its own repository.
+- **The docs site is built in CI but not hosted (14).** Command output is not yet
+  committed as fixtures and tested.
+- **Reproducibility is asserted for the static musl binary only, and between two clean
+  builds in the same environment (13, Operations).** Building on a different machine
+  or path is not covered.

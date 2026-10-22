@@ -1,0 +1,8 @@
+[book]
+title = "Bedrock"
+description = "Trace a container workload, remove what it never reached, verify the result, sign the proof."
+src = "docs"
+language = "en"
+
+[build]
+build-dir = "book"
