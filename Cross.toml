@@ -1,0 +1,5 @@
+# `cross test` runs the tests in a container with no writable home directory,
+# so Bedrock's cache (under XDG_CACHE_HOME, else $HOME/.cache) cannot be
+# created. The release workflow points XDG_CACHE_HOME at /tmp.
+[build.env]
+passthrough = ["XDG_CACHE_HOME"]
