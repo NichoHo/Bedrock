@@ -143,6 +143,7 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "$GH_TOKEN" | skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           skopeo copy "oci:slim" "docker://$image:$GITHUB_REF_NAME"
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           digest="$(skopeo inspect --format '{{.Digest}}' "docker://$image:$GITHUB_REF_NAME")"
           cosign sign --yes "$image@$digest"
           cosign attest --yes --type spdxjson --predicate bedrock.spdx.json "$image@$digest"
