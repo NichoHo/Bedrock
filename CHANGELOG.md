@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CONTRIBUTING.md`.
 
 ### Changed
+- The `trace` sandbox now runs the entrypoint with resource limits (open files, processes, data memory, CPU time) and, for `--workload-duration` runs without `--ready-port`, in a private network namespace with only loopback. `trace` and `slim` also warn when run as root.
 - Bad command-line arguments now exit 3 (usage error) instead of clap's 2, which means "verification failed" here.
 - Pruned layers use maximum gzip compression.
 - The snap is classic-confined: trace and slim need ptrace and a chroot.

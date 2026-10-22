@@ -56,8 +56,10 @@ explains each difference.
   maintained minimal base.
 - **`trace` and `slim` need Linux** on x86-64 or arm64, with `ptrace` and either root
   or unprivileged user namespaces. On macOS or Windows, run them in a Linux container.
-  The sandbox isolates the filesystem and credentials only. It is not a security
-  boundary: do not trace an image you do not trust on a machine you care about.
+  The sandbox isolates the filesystem and credentials, runs the entrypoint under
+  resource limits, and cuts it off from the network when the workload is a plain timed
+  run. It is not a security boundary: do not trace an image you do not trust on a
+  machine you care about.
 - **Keyless signing is not implemented.** `attest` signs with a key you provide.
 - **rpm databases in Berkeley DB or NDB format** (RHEL 7 and 8, openSUSE) are read but
   not rewritten, so a pruned image's SBOM still lists removed packages there. SQLite

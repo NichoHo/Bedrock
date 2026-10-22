@@ -5,10 +5,13 @@
 //! into the extracted rootfs, and execs the entrypoint under ptrace. Every
 //! syscall that names a file is decoded and recorded.
 //!
-//! This isolates the filesystem view and credentials only. Network, process
-//! and IPC namespaces are shared with the host: HTTP workloads need the
-//! network, and signals must reach the tracee. Do not trace an image you do not
-//! trust on a machine you care about.
+//! This isolates the filesystem view and credentials. The network namespace is
+//! private (loopback only) when the workload does not need to reach the
+//! entrypoint over the network; otherwise it is the host's, because the
+//! workload runs on the host side. Process and IPC namespaces are always
+//! shared: signals must reach the tracee. The traced process also runs under
+//! resource limits. Do not trace an image you do not trust on a machine you
+//! care about.
 use super::record::Recorder;
 use libc::{c_char, c_int, c_long, c_void};
 use std::collections::HashMap;
@@ -23,6 +26,14 @@ use std::time::{Duration, Instant};
 
 const GRACE: Duration = Duration::from_secs(3);
 
+// Ceilings for the traced process (BEDROCK_SPEC.md 13). They are generous: the
+// aim is to stop a runaway entrypoint, not to constrain a normal one.
+const MAX_OPEN_FILES: u64 = 4096;
+const MAX_PROCESSES: u64 = 4096;
+const MAX_DATA_BYTES: u64 = 8 << 30;
+/// Extra CPU seconds between the soft limit (SIGXCPU) and the hard one (SIGKILL).
+const CPU_HARD_SLACK: u64 = 5;
+
 pub struct RunSpec {
     pub rootfs: PathBuf,
     pub argv: Vec<String>,
@@ -36,6 +47,9 @@ pub struct RunSpec {
     pub timeout: Duration,
     /// Substring that marks readiness when seen in the tracee's output.
     pub log_pattern: Option<String>,
+    /// Give the entrypoint a private network namespace with only loopback.
+    /// Leave it off when something on the host must reach the entrypoint.
+    pub isolate_network: bool,
 }
 
 /// Shared between the tracer thread and the thread driving the workload.
@@ -348,6 +362,8 @@ struct Prepared {
     root_mode: bool,
     uid: u32,
     gid: u32,
+    isolate_network: bool,
+    cpu_secs: u64,
 }
 
 fn cstr(s: impl AsRef<[u8]>) -> std::io::Result<CString> {
@@ -402,6 +418,8 @@ fn prepare(spec: &RunSpec, root: &Path) -> std::io::Result<Prepared> {
         root_mode: host_uid == 0,
         uid: spec.uid,
         gid: spec.gid,
+        isolate_network: spec.isolate_network,
+        cpu_secs: spec.timeout.as_secs().max(1),
     })
 }
 
@@ -445,6 +463,40 @@ unsafe fn write_file(path: &[u8], data: &[u8]) -> bool {
     n == data.len() as isize
 }
 
+/// Lowers one resource limit, never above what the process may already set.
+unsafe fn limit(resource: c_int, soft: u64, hard: u64) {
+    let mut cur: libc::rlimit = std::mem::zeroed();
+    if libc::getrlimit(resource as _, &mut cur) != 0 {
+        return;
+    }
+    let hard = hard.min(cur.rlim_max as u64);
+    let new = libc::rlimit { rlim_cur: soft.min(hard) as libc::rlim_t, rlim_max: hard as _ };
+    libc::setrlimit(resource as _, &new);
+}
+
+/// Brings up `lo` in the new network namespace. Failure is tolerated: the
+/// entrypoint then has no network at all, which is what isolation promises.
+unsafe fn bring_up_loopback() {
+    // struct ifreq: a 16-byte interface name, then a union whose `ifr_flags`
+    // member is a short. 40 bytes on the 64-bit targets the tracer supports.
+    #[repr(C)]
+    struct IfReq {
+        name: [u8; 16],
+        flags: libc::c_short,
+        _pad: [u8; 22],
+    }
+    const SIOCSIFFLAGS: c_int = 0x8914;
+    let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+    if sock < 0 {
+        return;
+    }
+    let mut req =
+        IfReq { name: [0; 16], flags: (libc::IFF_UP | libc::IFF_RUNNING) as _, _pad: [0; 22] };
+    req.name[..2].copy_from_slice(b"lo");
+    libc::ioctl(sock, SIOCSIFFLAGS as _, &mut req as *mut IfReq);
+    libc::close(sock);
+}
+
 /// Runs in the forked child. Only async-signal-safe calls: no allocation.
 unsafe fn child_main(
     p: &Prepared,
@@ -466,8 +518,11 @@ unsafe fn child_main(
     libc::dup2(out_fd, 1);
     libc::dup2(out_fd, 2);
 
-    let flags =
+    let mut flags =
         if p.root_mode { libc::CLONE_NEWNS } else { libc::CLONE_NEWUSER | libc::CLONE_NEWNS };
+    if p.isolate_network {
+        flags |= libc::CLONE_NEWNET;
+    }
     if libc::unshare(flags) != 0 {
         die(err_fd, b"unshare failed (are unprivileged user namespaces enabled?)");
     }
@@ -479,6 +534,9 @@ unsafe fn child_main(
         {
             die(err_fd, b"writing user namespace id maps failed");
         }
+    }
+    if p.isolate_network {
+        bring_up_loopback();
     }
     let null_c: *const c_char = std::ptr::null();
     let null_v: *const c_void = std::ptr::null();
@@ -509,6 +567,10 @@ unsafe fn child_main(
     {
         die(err_fd, b"dropping to the image user failed");
     }
+    limit(libc::RLIMIT_CPU as c_int, p.cpu_secs, p.cpu_secs + CPU_HARD_SLACK);
+    limit(libc::RLIMIT_NOFILE as c_int, MAX_OPEN_FILES, MAX_OPEN_FILES);
+    limit(libc::RLIMIT_NPROC as c_int, MAX_PROCESSES, MAX_PROCESSES);
+    limit(libc::RLIMIT_DATA as c_int, MAX_DATA_BYTES, MAX_DATA_BYTES);
     libc::execve(argv[0], argv.as_ptr(), envp.as_ptr());
     die(err_fd, b"execve of the entrypoint failed")
 }

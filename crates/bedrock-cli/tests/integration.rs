@@ -371,6 +371,62 @@ fn trace_records_opened_files_and_the_static_closure() {
     assert_eq!(reach["workload"]["stopped_by_bedrock"], false);
 }
 
+/// Runs `script` as the entrypoint of a dash image under a timed trace and
+/// returns what Bedrock printed to stderr (the entrypoint's output goes there).
+/// `None` where the host lacks dash/glibc or cannot ptrace.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn trace_script_stderr(script: &str) -> Option<String> {
+    let img = tempfile::tempdir().unwrap();
+    dash_image_running(img.path(), script)?;
+    let out = Command::cargo_bin("bedrock")
+        .unwrap()
+        .args(["trace", "--workload-duration", "5s", "--platform", "linux/amd64"])
+        .arg(img.path())
+        .output()
+        .unwrap();
+    if out.status.code() == Some(4) {
+        eprintln!("skipping: {}", String::from_utf8_lossy(&out.stderr));
+        return None;
+    }
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    Some(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// A timed run gets a private network namespace: `/proc/net/dev` lists only `lo`.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn trace_with_a_timed_workload_has_only_loopback() {
+    let Some(err) = trace_script_stderr(r#"while read l; do echo "NET $l"; done < /proc/net/dev"#)
+    else {
+        return;
+    };
+    let ifaces: Vec<&str> = err
+        .lines()
+        .filter_map(|l| l.strip_prefix("NET "))
+        .filter_map(|l| l.split_once(':').map(|(name, _)| name.trim()))
+        .collect();
+    assert_eq!(ifaces, ["lo"], "{err}");
+}
+
+/// The traced process runs under resource limits, so a runaway entrypoint
+/// cannot exhaust descriptors or memory on the host.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn trace_limits_the_entrypoints_resources() {
+    let Some(err) = trace_script_stderr(r#"echo "NOFILE $(ulimit -n)"; echo "DATA $(ulimit -d)""#)
+    else {
+        return;
+    };
+    let value = |key: &str| -> u64 {
+        err.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or_else(|| panic!("no numeric {key} in {err}"))
+    };
+    assert!((1..=4096).contains(&value("NOFILE ")), "{err}");
+    assert!((1..=8 << 20).contains(&value("DATA ")), "{err}"); // dash reports KiB
+}
+
 #[test]
 fn trace_without_a_workload_is_a_usage_error() {
     Command::cargo_bin("bedrock")

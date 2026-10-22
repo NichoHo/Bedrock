@@ -60,10 +60,23 @@ find (`ENOENT`) are listed under `missing`; `verify` will use them.
 
 ## Limits you should know about
 
-- **Not a security sandbox.** Only the filesystem view and credentials are
-  isolated. Network, process and IPC namespaces are shared with the host, because
-  HTTP workloads need the network and signals must reach the process. Do not
-  trace an image you do not trust on a machine you care about.
+- **Not a security sandbox.** The filesystem view and credentials are isolated.
+  Process and IPC namespaces are shared with the host, because signals must reach
+  the process. The network is cut off (a private namespace with only loopback) for
+  a plain `--workload-duration` run. For `--workload`, `--workload-http` or any run
+  with `--ready-port`, the entrypoint shares the host's network, because the
+  workload runs on the host and has to reach it. Do not trace an image you do not
+  trust on a machine you care about.
+- **Resource limits, not a cgroup.** The entrypoint runs with ceilings of 4096 open
+  files, 4096 processes and 8 GiB of data memory, and CPU time equal to the run
+  timeout. They stop a runaway process, not a determined one. `RLIMIT_NPROC` counts
+  every process of that user on the host.
+- **The root filesystem is writable.** It is a throwaway copy, and a read-only one
+  would make applications fail that write to their own directories at startup (a PID
+  file, a cache), which would change what the trace sees.
+- **A run with no network sees fewer files than one with it.** A program that would
+  load a TLS root store only after connecting never gets that far. The built-in
+  keep list covers CA certificates; add anything else with `--keep-list`.
 - **Code paths the workload does not run are missed.** An error handler that
   opens a config file, a plugin loaded by `dlopen` with a computed name, a
   Python module imported lazily, a Node `require` in a branch never taken: none

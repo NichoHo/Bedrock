@@ -26,6 +26,7 @@ SHA-256 checksum file. That proves the download is intact, not who built it.
 ## What the tracing sandbox is not
 
 `bedrock trace` and `bedrock slim` run an image's entrypoint under `ptrace` in a
-chroot and mount namespace. That isolates the filesystem and credentials only.
-Network, process and IPC namespaces are shared with the host, so it is not a
-security boundary. Run them on a throwaway host for images you do not trust.
+chroot and mount namespace, under resource limits. That isolates the filesystem and
+credentials, and the network for plain timed runs. Process and IPC namespaces are
+shared with the host, and script and HTTP workloads share the host's network, so it
+is not a security boundary. Run them on a throwaway host for images you do not trust.

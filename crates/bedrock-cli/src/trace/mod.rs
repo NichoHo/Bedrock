@@ -157,6 +157,10 @@ pub fn run(req: TraceRequest<'_>) -> anyhow::Result<ReachSet> {
         gid,
         timeout: req.timeout,
         log_pattern: req.readiness.log_pattern.clone(),
+        // A script or HTTP workload runs on the host and reaches the entrypoint
+        // over the host's network. A plain timed run has no such client.
+        isolate_network: matches!(req.workload, Workload::Duration(_))
+            && req.readiness.port.is_none(),
     };
 
     #[derive(Default)]
