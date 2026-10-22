@@ -29,7 +29,7 @@ fn parse_zip<R: Read + Seek>(r: R) -> Result<Vec<Advisory>> {
     let mut out = Vec::new();
     for i in 0..zip.len() {
         let entry = zip.by_index(i)?;
-        if !entry.name().ends_with(".json") {
+        if !entry.name()?.ends_with(".json") {
             continue;
         }
         let mut buf = Vec::new();

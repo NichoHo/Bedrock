@@ -65,3 +65,19 @@ Use `layer_with_symlinks`, `layer_with_modes` or `finish_with_config` when the t
 - Anything read from an image is untrusted. Escape it before you print it (`escape_control` in `lib.rs`).
 - Never fake success on an unimplemented path. Use `not_implemented`.
 - Add a line to `CHANGELOG.md` for user-visible changes.
+
+## Releasing
+
+1. Move the **Unreleased** entries in `CHANGELOG.md` under the new version, and set
+   `version` in `crates/bedrock-cli/Cargo.toml` (and `snap/snapcraft.yaml`) to match.
+2. Run the **Release** workflow by hand (Actions, Run workflow). Run by hand it is a
+   dry run: it builds, tests, slims Bedrock's own image and checks that two clean
+   builds match, and it publishes and signs nothing.
+3. Push a tag `vX.Y.Z` that matches the crate version. The workflow then publishes
+   the release assets, signs each one keylessly with cosign, pushes the pruned image
+   to `ghcr.io/<owner>/bedrock`, and attaches its SBOM.
+4. Make the `bedrock` package on ghcr.io public the first time (Packages, Package
+   settings), so people can pull it.
+
+The snap is built by the workflow but not published: that needs a Snap Store account
+and a login token stored as a repository secret.

@@ -16,10 +16,12 @@ docker save bedrock-self-test -o "$WORK/image.tar"
     --report "$WORK/report.json" -- --version
 
 expected="$("$BEDROCK" --version)"
-# The entrypoint's output goes to stderr; the reach set is on stdout.
-actual="$("$BEDROCK" trace "$WORK/slim" --workload-duration 20s -- --version 2>&1 >/dev/null | head -1)"
-if [ "$actual" != "$expected" ]; then
-    echo "self-test failed: pruned image printed '$actual', expected '$expected'" >&2
+# The entrypoint's output goes to stderr, among Bedrock's own messages (such as
+# the warning about running as root); the reach set is on stdout.
+out="$("$BEDROCK" trace "$WORK/slim" --workload-duration 20s -- --version 2>&1 >/dev/null || true)"
+if ! printf '%s\n' "$out" | grep -Fxq "$expected"; then
+    echo "self-test failed: pruned image did not print '$expected'. It printed:" >&2
+    printf '%s\n' "$out" >&2
     exit 1
 fi
-echo "self-test passed: $actual"
+echo "self-test passed: $expected"

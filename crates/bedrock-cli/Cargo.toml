@@ -30,7 +30,7 @@ chrono = "0.4"
 # `bundled` compiles SQLite in, so the binary stays static (musl) with no
 # system libsqlite3.
 rusqlite = { version = "0.40", features = ["bundled"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 goblin = { version = "0.10.7", default-features = false, features = ["elf64", "elf32", "endian_fd"] }
 libc = "0.2.190"
 toml = "1.1.7"
