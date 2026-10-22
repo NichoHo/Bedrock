@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-22
+
 ### Added
 - Release workflow: a reproducible-build check, keyless cosign signing of every asset, a pruned release image pushed to ghcr.io and signed, and an SPDX SBOM of that image. Run by hand it is a dry run that publishes nothing.
 - A docs site (mdBook, built from `docs/`; CI checks that it builds), issue and pull request templates, and a section in `BEDROCK_SPEC.md` listing where the build differs from the plan.
