@@ -585,6 +585,23 @@ fn attest_without_a_key_is_an_environment_error() {
 }
 
 #[test]
+fn attest_refuses_a_key_passed_as_the_flag_value() {
+    let pem = "-----BEGIN PRIVATE KEY-----\nSECRETSECRET\n-----END PRIVATE KEY-----";
+    let joined = format!("--key={pem}");
+    for args in [vec!["attest", "whatever", "--key", pem], vec!["attest", "whatever", &joined]] {
+        Command::cargo_bin("bedrock")
+            .unwrap()
+            .args(args)
+            .assert()
+            .failure()
+            .code(3)
+            .stderr(predicate::str::contains("path of a key file"))
+            // The error must not repeat the key into logs.
+            .stderr(predicate::str::contains("SECRETSECRET").not());
+    }
+}
+
+#[test]
 fn attest_adds_a_signature_and_sbom_to_an_oci_layout() {
     use p256::pkcs8::EncodePrivateKey;
     let dir = tempfile::tempdir().unwrap();

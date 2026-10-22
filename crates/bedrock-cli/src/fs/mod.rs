@@ -441,6 +441,14 @@ mod tests {
     }
 
     #[test]
+    fn absolute_path_is_rejected() {
+        let tar = write_tar_gz(&[("/etc/passwd", b"hostile")]);
+        let mut inv = FileInventory::new();
+        let err = inv.apply_layer(tar.path(), "sha256:layer1").unwrap_err();
+        assert!(matches!(err, FsError::HostileEntry(_)));
+    }
+
+    #[test]
     fn whiteout_removes_prior_layer_file() {
         let base = write_tar_gz(&[("etc/foo.conf", b"1")]);
         let mut inv = FileInventory::new();

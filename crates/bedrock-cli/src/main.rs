@@ -464,7 +464,30 @@ fn main() {
     }
 }
 
+/// BEDROCK_SPEC.md 13: a key must never travel as a flag value, where process
+/// listings and shell history would expose it. This runs before clap parses,
+/// because clap echoes a rejected value back in its error message.
+fn refuse_key_as_flag_value(args: impl IntoIterator<Item = std::ffi::OsString>) {
+    let mut args = args.into_iter().skip(1).map(|a| a.to_string_lossy().into_owned());
+    while let Some(arg) = args.next() {
+        let value = match arg.as_str() {
+            "--" => return,
+            "--key" => args.next().unwrap_or_default(),
+            _ => arg.strip_prefix("--key=").unwrap_or_default().to_string(),
+        };
+        if value.contains("-----BEGIN") {
+            eprintln!(
+                "Error: --key takes the path of a key file, not the key itself. A key on the \
+                 command line is visible in process listings and shell history; save it to a \
+                 file readable only by you and pass that path"
+            );
+            std::process::exit(3);
+        }
+    }
+}
+
 fn run() -> Result<()> {
+    refuse_key_as_flag_value(std::env::args_os());
     // clap exits 2 on bad arguments, but 2 means "verification failed" here
     // (BEDROCK_SPEC.md 7.4): bad arguments are a usage error, exit 3.
     let cli = Cli::try_parse().unwrap_or_else(|e| {

@@ -36,6 +36,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CONTRIBUTING.md`.
 
 ### Changed
+- `--key` now refuses key text given as the flag value (exit 3) and never repeats it in the error; it takes a file path.
 - The `trace` sandbox now runs the entrypoint with resource limits (open files, processes, data memory, CPU time) and, for `--workload-duration` runs without `--ready-port`, in a private network namespace with only loopback. `trace` and `slim` also warn when run as root.
 - Bad command-line arguments now exit 3 (usage error) instead of clap's 2, which means "verification failed" here.
 - Pruned layers use maximum gzip compression.
